@@ -1,0 +1,82 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    background-color: #f6f4fa;
+    color: #1b003a;
+    font-family: 'Inter', system-ui, -apple-system, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+}
+
+.bg-tata-purple {
+  background-color: #1c023d;
+}
+
+.bg-tata-magenta {
+  background-color: #e20d65;
+}
+
+.btn-tata-magenta {
+  background-color: #e20d65;
+  color: #ffffff;
+  font-weight: 700;
+  border-radius: 0.75rem;
+  box-shadow: 0 4px 14px -2px rgba(226, 13, 101, 0.35);
+  transition: all 0.2s ease;
+}
+
+.btn-tata-magenta:hover {
+  background-color: #cc0059;
+  box-shadow: 0 6px 20px -2px rgba(226, 13, 101, 0.45);
+}
+
+.tata-card {
+  background-color: #ffffff;
+  border: 1px solid #e6e0f3;
+  box-shadow: 0 4px 20px -2px rgba(27, 0, 58, 0.04), 0 2px 6px -1px rgba(27, 0, 58, 0.02);
+  border-radius: 1rem;
+}
+
+/* Custom Scrollbars */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: #f1ecf9;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #d4c7ed;
+  border-radius: 9999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #e20d65;
+}
+
+@media print {
+  body * {
+    visibility: hidden;
+  }
+  .printable-certificate, .printable-certificate * {
+    visibility: visible;
+  }
+  .printable-certificate {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 100% !important;
+    margin: 0 !important;
+    padding: 24px !important;
+    box-shadow: none !important;
+    background: #ffffff !important;
+  }
+  .no-print {
+    display: none !important;
+  }
+}

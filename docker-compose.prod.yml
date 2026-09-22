@@ -1,0 +1,92 @@
+version: '3.8'
+
+services:
+  # 1. Enterprise PostgreSQL 16 Database
+  postgres:
+    image: postgres:16-alpine
+    container_name: stocksentry_postgres_prod
+    restart: always
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-stocksentry_admin}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-tatafiber_secure_prod_pwd_2026}
+      POSTGRES_DB: ${POSTGRES_DB:-stocksentry_prod}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-stocksentry_admin} -d ${POSTGRES_DB:-stocksentry_prod}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - stocksentry_network
+
+  # 2. Multi-Worker FastAPI Backend (Gunicorn + Uvicorn Workers)
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: stocksentry_backend_prod
+    restart: always
+    environment:
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-stocksentry_admin}:${POSTGRES_PASSWORD:-tatafiber_secure_prod_pwd_2026}@postgres:5432/${POSTGRES_DB:-stocksentry_prod}
+      - ENVIRONMENT=production
+      - WEB_CONCURRENCY=${WEB_CONCURRENCY:-4}
+      - SECRET_KEY=${SECRET_KEY}
+      - CORS_ORIGINS=${CORS_ORIGINS:-https://tataplayfiber.com,https://inventory.tataplayfiber.com}
+      - GROQ_API_KEY=${GROQ_API_KEY}
+      - SMTP_HOST=${SMTP_HOST}
+      - SMTP_PORT=${SMTP_PORT:-587}
+      - SMTP_USER=${SMTP_USER}
+      - SMTP_PASSWORD=${SMTP_PASSWORD}
+      - TWILIO_ACCOUNT_SID=${TWILIO_ACCOUNT_SID}
+      - TWILIO_AUTH_TOKEN=${TWILIO_AUTH_TOKEN}
+      - TWILIO_FROM_PHONE=${TWILIO_FROM_PHONE}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - stocksentry_network
+
+  # 3. Optimized React SPA Frontend (Nginx Alpine)
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: stocksentry_frontend_prod
+    restart: always
+    depends_on:
+      - backend
+    networks:
+      - stocksentry_network
+
+  # 4. Central Edge Gateway & SSL Reverse Proxy (Caddy)
+  caddy:
+    image: caddy:2-alpine
+    container_name: stocksentry_gateway_prod
+    restart: always
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      - DOMAIN_NAME=${DOMAIN_NAME:-localhost}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - backend
+      - frontend
+    networks:
+      - stocksentry_network
+
+networks:
+  stocksentry_network:
+    driver: bridge
+
+volumes:
+  postgres_data:
+    driver: local
+  caddy_data:
+    driver: local
+  caddy_config:
+    driver: local

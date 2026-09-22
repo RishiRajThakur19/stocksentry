@@ -1,0 +1,23 @@
+{$DOMAIN_NAME:localhost} {
+    # Reverse proxy backend API and WebSockets
+    handle /api/* {
+        reverse_proxy backend:8000
+    }
+
+    handle /ws {
+        reverse_proxy backend:8000
+    }
+
+    handle /docs {
+        reverse_proxy backend:8000
+    }
+
+    handle /openapi.json {
+        reverse_proxy backend:8000
+    }
+
+    # Serve React Frontend
+    handle {
+        reverse_proxy frontend:80
+    }
+}

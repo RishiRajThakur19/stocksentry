@@ -1,0 +1,36 @@
+# Environment variables
+.env
+.env.*
+!.env.example
+!.env.production.example
+backend/.env
+
+# Database (Local SQLite)
+backend/*.db
+*.sqlite
+*.sqlite3
+*.db
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+backend/venv/
+.pytest_cache/
+.coverage
+
+# Node / React
+node_modules/
+frontend/node_modules/
+dist/
+frontend/dist/
+.vite/
+frontend/.vite/
+
+# Operating System & IDE
+.DS_Store
+*/.DS_Store
+.vscode/
+.idea/
+*.log
