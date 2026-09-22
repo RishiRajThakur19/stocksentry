@@ -650,3 +650,18 @@ class SubscriberInstallationResponse(BaseModel):
     installed_at: datetime
     message: str
 
+# My Lakshya CRM Workforce Sync Schemas
+class LakshyaSyncRequest(BaseModel):
+    crm_url: Optional[str] = None
+    api_key: Optional[str] = None
+
+class LakshyaSyncResponse(BaseModel):
+    status: str
+    sync_mode: str
+    message: str
+    endpoint_used: str
+    scanned_count: int
+    created_count: int
+    updated_count: int
+    synced_users: List[dict]
+

@@ -10,8 +10,10 @@ from ..database import get_db
 from ..models import User, Location, Region, AssetUnit, RoleEnum, Item, ItemVariant, AssetLifecycleEvent, InventoryStock, AssetStatusEnum
 from ..schemas import (
     UserAdminOut, UserCreateRequest, UserResetPasswordRequest, 
-    BulkUploadPreviewResponse, BulkUserRowPreview, EnterpriseIngestSummary
+    BulkUploadPreviewResponse, BulkUserRowPreview, EnterpriseIngestSummary,
+    LakshyaSyncRequest, LakshyaSyncResponse
 )
+from ..services.lakshya_crm_service import sync_lakshya_workforce_to_db, DEFAULT_LAKSHYA_CRM_URL
 from ..auth import (
     get_password_hash, get_current_user, require_super_admin, 
     require_regional_or_super_admin
@@ -727,3 +729,46 @@ async def bulk_upload_enterprise_workbook(
         sample_users=[{"name": u["name"], "email": u["email"], "role": u["role"]} for u in created_users[:8]],
         sample_devices=sample_assets
     )
+
+@router.get("/crm-config")
+def get_lakshya_crm_config(
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Returns configured My Lakshya App / CRM Gateway status.
+    """
+    import os
+    configured_url = os.getenv("LAKSHYA_CRM_URL", DEFAULT_LAKSHYA_CRM_URL)
+    has_api_key = bool(os.getenv("LAKSHYA_API_KEY"))
+    return {
+        "system": "My Lakshya App - Tata Play Fiber CRM",
+        "crm_url": configured_url,
+        "is_configured": True,
+        "has_api_key": has_api_key,
+        "supported_roles": ["FIELD_WORKER", "MANAGER"],
+        "telecom_circles": ["Delhi", "Mumbai", "Bengaluru", "Kolkata", "Chennai", "Hyderabad", "Pune"],
+        "status": "ONLINE"
+    }
+
+@router.post("/sync-lakshya", response_model=LakshyaSyncResponse)
+def sync_workforce_from_lakshya(
+    payload: Optional[LakshyaSyncRequest] = None,
+    current_user: User = Depends(require_regional_or_super_admin),
+    db: Session = Depends(get_db)
+):
+    """
+    Synchronizes workforce records from My Lakshya App / Tata Play Fiber CRM.
+    Supports real CRM URL with seamless local simulation fallback.
+    Authorized for Super Admin and Regional Admin.
+    """
+    req_url = payload.crm_url if payload else None
+    req_key = payload.api_key if payload else None
+
+    result = sync_lakshya_workforce_to_db(
+        db=db,
+        crm_url=req_url,
+        api_key=req_key,
+        sync_user_id=current_user.user_id
+    )
+
+    return LakshyaSyncResponse(**result)

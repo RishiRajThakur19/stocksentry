@@ -1,9 +1,16 @@
 import os
+import sys
 import time
 import uuid
 import logging
+from pathlib import Path
 from datetime import datetime
 from dotenv import load_dotenv
+
+# Ensure backend directory is in sys.path for direct module imports
+BACKEND_DIR = Path(__file__).resolve().parent.parent
+if str(BACKEND_DIR) not in sys.path:
+    sys.path.insert(0, str(BACKEND_DIR))
 
 # Load .env file at startup
 load_dotenv()
@@ -24,7 +31,11 @@ from .routers import (
     complaints, decommission, transfers, offboarding
 )
 from .websocket_manager import ws_manager
-from seed_data import seed_database
+
+try:
+    from seed_data import seed_database
+except ImportError:
+    from ..seed_data import seed_database
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("stocksentry.main")

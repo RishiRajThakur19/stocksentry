@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Users, Plus, KeyRound, CheckCircle2, ShieldCheck, Mail, MapPin, Search, Download, Building, ShieldAlert } from 'lucide-react';
+import { Users, Plus, KeyRound, CheckCircle2, ShieldCheck, Mail, MapPin, Search, Download, Building, ShieldAlert, Smartphone, RefreshCw } from 'lucide-react';
 import api from '../api/client';
 import { exportToCSV } from '../utils/exportHelper';
 
@@ -9,6 +9,8 @@ export const UserManagementSection = ({ locations = [] }) => {
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
   const [filterRole, setFilterRole] = useState('ALL');
+  const [syncingCrm, setSyncingCrm] = useState(false);
+  const [crmFeedback, setCrmFeedback] = useState('');
 
   // Create User Modal
   const [isCreateOpen, setIsCreateOpen] = useState(false);
@@ -109,6 +111,22 @@ export const UserManagementSection = ({ locations = [] }) => {
     ]);
   };
 
+  const handleSyncLakshya = async () => {
+    setSyncingCrm(true);
+    setCrmFeedback('');
+    try {
+      const res = await api.post('/users/sync-lakshya', {});
+      setCrmFeedback(`Synced ${res.data.scanned_count} workforce profiles from My Lakshya CRM! (${res.data.created_count} new, ${res.data.updated_count} updated)`);
+      await fetchUsersAndRegions();
+      setTimeout(() => setCrmFeedback(''), 6000);
+    } catch (err) {
+      setCrmFeedback(err.response?.data?.detail || 'CRM Sync failed');
+      setTimeout(() => setCrmFeedback(''), 6000);
+    } finally {
+      setSyncingCrm(false);
+    }
+  };
+
   return (
     <div className="space-y-6 font-sans w-full max-w-[1600px] mx-auto pb-12">
       
@@ -124,7 +142,17 @@ export const UserManagementSection = ({ locations = [] }) => {
           </p>
         </div>
 
-        <div className="flex items-center gap-3 font-bold text-xs">
+        <div className="flex flex-wrap items-center gap-3 font-bold text-xs">
+          <button
+            disabled={syncingCrm}
+            onClick={handleSyncLakshya}
+            className="px-4 py-2.5 rounded bg-gradient-to-r from-[#1c023d] to-[#6700ce] hover:opacity-95 text-white shadow-sm transition flex items-center gap-2 cursor-pointer disabled:opacity-50"
+          >
+            <Smartphone className="w-4 h-4 text-pink-300" />
+            <RefreshCw className={`w-3.5 h-3.5 ${syncingCrm ? 'animate-spin' : ''}`} />
+            <span>{syncingCrm ? 'Syncing...' : 'Sync My Lakshya CRM'}</span>
+          </button>
+
           <button
             onClick={handleExportCSV}
             className="px-4 py-2.5 rounded bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-300 shadow-sm transition flex items-center gap-2"
@@ -142,6 +170,13 @@ export const UserManagementSection = ({ locations = [] }) => {
           </button>
         </div>
       </div>
+
+      {crmFeedback && (
+        <div className="p-4 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-800 font-bold text-xs flex items-center gap-2 animate-fade-in shadow-sm">
+          <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0" />
+          <span>{crmFeedback}</span>
+        </div>
+      )}
 
       {/* Filter Bar */}
       <div className="bg-white rounded-lg p-4 border border-slate-200 shadow-sm flex flex-col md:flex-row md:items-center justify-between gap-4">

@@ -170,13 +170,16 @@ curl -X POST http://localhost:8000/api/auth/login \
 
 ---
 
-### 4.9 User Management & Bulk Spreadsheet Onboarding (`/api/users`)
+### 4.9 User Management & My Lakshya App CRM Integration (`/api/users`)
 
 | Method | Endpoint | Access | Description |
 | :--- | :--- | :--- | :--- |
 | `GET` | `/api/users` | Super / Regional Admin | Lists all enterprise personnel across regions and hubs. |
+| `POST` | `/api/users/sync-lakshya` | Super / Regional Admin | **My Lakshya App / CRM Gateway Sync**: Connects to Tata Play Fiber CRM API (`LAKSHYA_CRM_URL`) to extract field technician rosters, employee codes, and hub assignments. Auto-falls back to realistic air-gapped simulation if offline. |
+| `GET` | `/api/users/crm-config` | Authenticated | Retrieves My Lakshya CRM connection status, configured endpoint URL, and circle coverage. |
 | `GET` | `/api/users/template` | Admin | Downloads official Excel (.xlsx) bulk user onboarding spreadsheet template. |
 | `POST` | `/api/users/bulk-upload` | Super Admin | Parses uploaded Excel sheet to batch-create regional managers and field workers. |
+| `POST` | `/api/users/bulk-upload-enterprise` | Super Admin | Multi-sheet enterprise workbook ingestion for 600+ personnel and 3,600+ toolkits. |
 
 ---
 
