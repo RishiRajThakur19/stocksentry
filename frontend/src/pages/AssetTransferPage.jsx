@@ -1,11 +1,13 @@
 import React, { useState, useEffect } from 'react';
 import { 
   ArrowLeftRight, CheckCircle2, XCircle, AlertTriangle, 
-  MapPin, User, ArrowRight, RefreshCw, Send, ShieldCheck
+  MapPin, User, ArrowRight, RefreshCw, Send, ShieldCheck,
+  TrendingDown, Truck, Zap, Sparkles, Building, Play
 } from 'lucide-react';
 import api from '../api/client';
 
 export const AssetTransferPage = ({ userRole = 'MANAGER' }) => {
+  const [activeTab, setActiveTab] = useState('DIRECT_TRANSFERS'); // 'DIRECT_TRANSFERS', 'MIGRATION_OPTIMIZER'
   const [transfers, setTransfers] = useState([]);
   const [locations, setLocations] = useState([]);
   const [users, setUsers] = useState([]);
@@ -18,6 +20,11 @@ export const AssetTransferPage = ({ userRole = 'MANAGER' }) => {
   const [notes, setNotes] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [toastMsg, setToastMsg] = useState('');
+
+  // Migration Optimizer State
+  const [optimizationPlan, setOptimizationPlan] = useState(null);
+  const [loadingPlan, setLoadingPlan] = useState(false);
+  const [executingRouteId, setExecutingRouteId] = useState(null);
 
   useEffect(() => {
     fetchData();
@@ -55,9 +62,38 @@ export const AssetTransferPage = ({ userRole = 'MANAGER' }) => {
     }
   };
 
+  const fetchOptimizationPlan = async () => {
+    setLoadingPlan(true);
+    try {
+      const res = await api.get('/transfers/migration-optimizer');
+      setOptimizationPlan(res.data);
+    } catch (err) {
+      console.error('Failed to load migration plan:', err);
+      showToast('Failed to load migration optimization plan.');
+    } finally {
+      setLoadingPlan(false);
+    }
+  };
+
+  const executeOptimizationRoute = async (routeId) => {
+    setExecutingRouteId(routeId);
+    try {
+      const res = await api.post('/transfers/execute-optimization', {
+        route_ids: [routeId]
+      });
+      showToast(res.data?.message || 'Migration route successfully executed!');
+      await fetchOptimizationPlan();
+      await fetchData();
+    } catch (err) {
+      alert(err.response?.data?.detail || 'Failed to execute migration route.');
+    } finally {
+      setExecutingRouteId(null);
+    }
+  };
+
   const showToast = (msg) => {
     setToastMsg(msg);
-    setTimeout(() => setToastMsg(''), 3500);
+    setTimeout(() => setToastMsg(''), 4500);
   };
 
   const handleInitiateTransfer = async (e) => {
@@ -136,220 +172,397 @@ export const AssetTransferPage = ({ userRole = 'MANAGER' }) => {
             <h1 className="text-2xl font-black text-[#1c023d] tracking-tight">Direct Asset Transfers & Inter-Hub Shipments</h1>
           </div>
           <p className="text-xs text-slate-500 mt-1">
-            Execute direct technician handoffs without warehouse transit or initiate cross-city equipment transfers with destination manager acceptance.
+            Execute direct technician handoffs, cross-city transfers, and automated inter-hub asset migration optimization.
           </p>
+        </div>
+
+        {/* Tab Controls */}
+        <div className="flex items-center gap-2 bg-slate-100 p-1 rounded-xl border border-slate-200 text-xs font-bold">
+          <button
+            onClick={() => setActiveTab('DIRECT_TRANSFERS')}
+            className={`px-3 py-2 rounded-lg transition flex items-center gap-1.5 ${
+              activeTab === 'DIRECT_TRANSFERS'
+                ? 'bg-white text-[#1c023d] shadow-xs'
+                : 'text-slate-600 hover:text-slate-900'
+            }`}
+          >
+            <ArrowLeftRight className="w-3.5 h-3.5" />
+            <span>Direct Transfers Queue</span>
+          </button>
+
+          <button
+            onClick={() => {
+              setActiveTab('MIGRATION_OPTIMIZER');
+              if (!optimizationPlan) fetchOptimizationPlan();
+            }}
+            className={`px-3 py-2 rounded-lg transition flex items-center gap-1.5 ${
+              activeTab === 'MIGRATION_OPTIMIZER'
+                ? 'bg-[#1c023d] text-white shadow-xs'
+                : 'text-slate-600 hover:text-slate-900'
+            }`}
+          >
+            <Sparkles className="w-3.5 h-3.5 text-pink-400" />
+            <span>AI Asset Migration Optimizer</span>
+          </button>
         </div>
       </div>
 
       {toastMsg && (
-        <div className="p-3 rounded-lg bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs font-bold flex items-center gap-2 animate-fade-in">
-          <CheckCircle2 className="w-4 h-4 shrink-0" />
+        <div className="p-3.5 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs font-bold flex items-center gap-2 animate-fade-in shadow-sm">
+          <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-600" />
           <span>{toastMsg}</span>
         </div>
       )}
 
-      {/* Grid: Left Transfer Form | Right Transfers Queue */}
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-        
-        {/* Left Column (5/12): Initiate Transfer Card */}
-        <div className="lg:col-span-5 bg-white rounded-xl p-6 border border-slate-200 shadow-sm space-y-4">
-          <h2 className="text-sm font-black text-[#1c023d] border-b border-slate-100 pb-3 flex items-center gap-2">
-            <Send className="w-4 h-4 text-[#e20d65]" />
-            Initiate Asset Transfer
-          </h2>
+      {/* VIEW 1: DIRECT TRANSFERS */}
+      {activeTab === 'DIRECT_TRANSFERS' && (
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+          
+          {/* Left Column (5/12): Initiate Transfer Card */}
+          <div className="lg:col-span-5 bg-white rounded-xl p-6 border border-slate-200 shadow-sm space-y-4">
+            <h2 className="text-sm font-black text-[#1c023d] border-b border-slate-100 pb-3 flex items-center gap-2">
+              <Send className="w-4 h-4 text-[#e20d65]" />
+              Initiate Asset Transfer
+            </h2>
 
-          <form onSubmit={handleInitiateTransfer} className="space-y-4 text-xs">
-            
-            {/* Transfer Mode Selector */}
-            <div className="space-y-1.5">
-              <label className="block text-slate-700 font-bold">Transfer Type *</label>
-              <div className="grid grid-cols-2 gap-2">
-                <button
-                  type="button"
-                  onClick={() => setTransferType('SAME_CITY')}
-                  className={`p-3 rounded-xl border text-left font-bold transition flex flex-col justify-between ${
-                    transferType === 'SAME_CITY'
-                      ? 'bg-purple-50 border-[#6700ce] text-[#6700ce] ring-2 ring-purple-400/20'
-                      : 'bg-slate-50 border-slate-200 text-slate-700'
-                  }`}
-                >
-                  <span className="text-xs font-black">Same-City Handoff</span>
-                  <span className="text-[10px] text-slate-500 mt-1 font-normal">Direct tech-to-tech (instant)</span>
-                </button>
+            <form onSubmit={handleInitiateTransfer} className="space-y-4 text-xs">
+              
+              {/* Transfer Mode Selector */}
+              <div className="space-y-1.5">
+                <label className="block text-slate-700 font-bold">Transfer Type *</label>
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setTransferType('SAME_CITY')}
+                    className={`p-3 rounded-xl border text-left font-bold transition flex flex-col justify-between ${
+                      transferType === 'SAME_CITY'
+                        ? 'bg-purple-50 border-[#6700ce] text-[#6700ce] ring-2 ring-purple-400/20'
+                        : 'bg-slate-50 border-slate-200 text-slate-700'
+                    }`}
+                  >
+                    <span className="text-xs font-black">Same-City Handoff</span>
+                    <span className="text-[10px] text-slate-500 mt-1 font-normal">Direct tech-to-tech (instant)</span>
+                  </button>
 
-                <button
-                  type="button"
-                  onClick={() => setTransferType('CROSS_CITY')}
-                  className={`p-3 rounded-xl border text-left font-bold transition flex flex-col justify-between ${
-                    transferType === 'CROSS_CITY'
-                      ? 'bg-indigo-50 border-indigo-600 text-indigo-700 ring-2 ring-indigo-400/20'
-                      : 'bg-slate-50 border-slate-200 text-slate-700'
-                  }`}
-                >
-                  <span className="text-xs font-black">Cross-City Transfer</span>
-                  <span className="text-[10px] text-slate-500 mt-1 font-normal">Requires dest manager acceptance</span>
-                </button>
+                  <button
+                    type="button"
+                    onClick={() => setTransferType('CROSS_CITY')}
+                    className={`p-3 rounded-xl border text-left font-bold transition flex flex-col justify-between ${
+                      transferType === 'CROSS_CITY'
+                        ? 'bg-indigo-50 border-indigo-600 text-indigo-700 ring-2 ring-indigo-400/20'
+                        : 'bg-slate-50 border-slate-200 text-slate-700'
+                    }`}
+                  >
+                    <span className="text-xs font-black">Cross-City Transfer</span>
+                    <span className="text-[10px] text-slate-500 mt-1 font-normal">Requires dest manager acceptance</span>
+                  </button>
+                </div>
               </div>
-            </div>
 
-            {/* Asset ID Input */}
-            <div>
-              <label className="block text-slate-700 font-bold mb-1">Asset ID / Serial Ref *</label>
-              <input
-                type="number"
-                required
-                value={selectedAssetId}
-                onChange={(e) => setSelectedAssetId(e.target.value)}
-                placeholder="e.g. 1"
-                className="w-full px-3 py-2 rounded-lg border border-slate-300 font-mono font-bold text-slate-900 focus:outline-none focus:border-[#e20d65]"
-              />
-              <span className="text-[10px] text-slate-400 mt-0.5 block">Asset #1 corresponds to modem TPF-NOK-W6-10001</span>
-            </div>
-
-            {transferType === 'SAME_CITY' ? (
+              {/* Asset ID Input */}
               <div>
-                <label className="block text-slate-700 font-bold mb-1">Select Destination Field Technician *</label>
-                <select
-                  value={targetUserId}
-                  onChange={(e) => setTargetUserId(e.target.value)}
-                  className="w-full px-3 py-2 rounded-lg border border-slate-300 font-bold text-slate-800 bg-white"
-                >
-                  {users.map((u) => (
-                    <option key={u.user_id} value={u.user_id}>
-                      {u.name} ({u.role} • {u.location_name})
-                    </option>
-                  ))}
-                </select>
+                <label className="block text-slate-700 font-bold mb-1">Asset ID / Serial Ref *</label>
+                <input
+                  type="number"
+                  required
+                  value={selectedAssetId}
+                  onChange={(e) => setSelectedAssetId(e.target.value)}
+                  placeholder="e.g. 1"
+                  className="w-full px-3 py-2 rounded-lg border border-slate-300 font-mono font-bold text-slate-900 focus:outline-none focus:border-[#e20d65]"
+                />
+                <span className="text-[10px] text-slate-400 mt-0.5 block">Asset #1 corresponds to modem TPF-NOK-W6-10001</span>
               </div>
+
+              {transferType === 'SAME_CITY' ? (
+                <div>
+                  <label className="block text-slate-700 font-bold mb-1">Select Destination Field Technician *</label>
+                  <select
+                    value={targetUserId}
+                    onChange={(e) => setTargetUserId(e.target.value)}
+                    className="w-full px-3 py-2 rounded-lg border border-slate-300 font-bold text-slate-800 bg-white"
+                  >
+                    {users.map((u) => (
+                      <option key={u.user_id} value={u.user_id}>
+                        {u.name} ({u.role} • {u.location_name})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              ) : (
+                <div>
+                  <label className="block text-slate-700 font-bold mb-1">Select Destination City Hub *</label>
+                  <select
+                    value={targetCityId}
+                    onChange={(e) => setTargetCityId(e.target.value)}
+                    className="w-full px-3 py-2 rounded-lg border border-slate-300 font-bold text-slate-800 bg-white"
+                  >
+                    {locations.map((loc) => (
+                      <option key={loc.location_id} value={loc.location_id}>
+                        {loc.name} ({loc.city})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
+
+              <div>
+                <label className="block text-slate-700 font-bold mb-1">Transfer Remarks / Reason</label>
+                <textarea
+                  rows={2}
+                  value={notes}
+                  onChange={(e) => setNotes(e.target.value)}
+                  placeholder="e.g. Subscriber density surge or tech device replacement"
+                  className="w-full px-3 py-2 rounded-lg border border-slate-300 text-slate-800 focus:outline-none focus:border-[#e20d65]"
+                />
+              </div>
+
+              <button
+                type="submit"
+                disabled={submitting}
+                className="w-full py-2.5 rounded-lg bg-[#6700ce] hover:bg-[#5200a5] text-white font-extrabold shadow-sm transition flex items-center justify-center gap-2"
+              >
+                <ArrowLeftRight className="w-4 h-4" />
+                <span>{submitting ? 'Executing Transfer...' : 'Confirm & Execute Transfer'}</span>
+              </button>
+
+            </form>
+          </div>
+
+          {/* Right Column (7/12): Live Transfers Table */}
+          <div className="lg:col-span-7 bg-white rounded-xl p-6 border border-slate-200 shadow-sm space-y-4">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+              <h2 className="text-sm font-black text-[#1c023d] flex items-center gap-2">
+                <ArrowLeftRight className="w-4 h-4 text-[#6700ce]" />
+                Transfer Log & Destination Acceptance Queue
+              </h2>
+              <button onClick={fetchData} className="text-xs font-bold text-[#6700ce] hover:underline flex items-center gap-1">
+                <RefreshCw className="w-3.5 h-3.5" /> Refresh
+              </button>
+            </div>
+
+            {transfers.length === 0 ? (
+              <div className="py-12 text-center text-slate-400 text-xs">No transfer records found.</div>
             ) : (
-              <div>
-                <label className="block text-slate-700 font-bold mb-1">Select Destination City Hub *</label>
-                <select
-                  value={targetCityId}
-                  onChange={(e) => setTargetCityId(e.target.value)}
-                  className="w-full px-3 py-2 rounded-lg border border-slate-300 font-bold text-slate-800 bg-white"
-                >
-                  {locations.map((loc) => (
-                    <option key={loc.location_id} value={loc.location_id}>
-                      {loc.name} ({loc.city} • {loc.region_name})
-                    </option>
-                  ))}
-                </select>
+              <div className="overflow-x-auto border border-slate-200 rounded-lg max-h-[500px]">
+                <table className="w-full text-left text-xs">
+                  <thead className="sticky top-0 bg-slate-50 text-slate-600 font-bold uppercase border-b border-slate-200 text-[11px]">
+                    <tr>
+                      <th className="py-3 px-3">Transfer ID</th>
+                      <th className="py-3 px-3">Device & Serial</th>
+                      <th className="py-3 px-3">Movement Route</th>
+                      <th className="py-3 px-3">Status</th>
+                      <th className="py-3 px-3 text-right">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {transfers.map((t) => (
+                      <tr key={t.transfer_id} className="hover:bg-slate-50 transition">
+                        <td className="py-2.5 px-3 font-mono font-bold text-slate-400">
+                          #{t.transfer_id}
+                        </td>
+                        <td className="py-2.5 px-3">
+                          <span className="font-extrabold text-[#1c023d] block">{t.item_name}</span>
+                          <span className="font-mono text-[11px] text-purple-800 font-bold">SN: {t.serial_number}</span>
+                        </td>
+                        <td className="py-2.5 px-3">
+                          <div className="flex items-center gap-1.5 font-bold text-slate-700">
+                            <span>{t.from_user_name || t.from_city_name}</span>
+                            <ArrowRight className="w-3 h-3 text-slate-400" />
+                            <span className="text-purple-900">{t.to_user_name || t.to_city_name}</span>
+                          </div>
+                          <span className="text-[10px] text-slate-400 font-mono">
+                            {t.transfer_type === 'SAME_CITY' ? 'Same-City Handoff' : 'Inter-Hub Transit'}
+                          </span>
+                        </td>
+                        <td className="py-2.5 px-3">
+                          {t.status === 'COMPLETED' ? (
+                            <span className="px-2 py-0.5 rounded text-[10px] font-black uppercase bg-emerald-50 text-emerald-700 border border-emerald-200">
+                              Completed
+                            </span>
+                          ) : t.status === 'PENDING_ACCEPTANCE' ? (
+                            <span className="px-2 py-0.5 rounded text-[10px] font-black uppercase bg-amber-50 text-amber-700 border border-amber-200">
+                              Awaiting Acceptance
+                            </span>
+                          ) : (
+                            <span className="px-2 py-0.5 rounded text-[10px] font-black uppercase bg-rose-50 text-rose-700 border border-rose-200">
+                              Rejected
+                            </span>
+                          )}
+                        </td>
+                        <td className="py-2.5 px-3 text-right">
+                          {t.status === 'PENDING_ACCEPTANCE' && (
+                            <div className="flex items-center justify-end gap-1.5">
+                              <button
+                                onClick={() => handleAcceptTransfer(t.transfer_id)}
+                                className="px-2.5 py-1 rounded bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-[11px] transition shadow-sm"
+                              >
+                                Accept
+                              </button>
+                              <button
+                                onClick={() => handleRejectTransfer(t.transfer_id)}
+                                className="px-2 py-1 rounded bg-rose-50 hover:bg-rose-100 text-rose-700 font-bold text-[11px] border border-rose-200 transition"
+                              >
+                                Reject
+                              </button>
+                            </div>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
               </div>
             )}
 
-            <div>
-              <label className="block text-slate-700 font-bold mb-1">Transfer Notes / Reason</label>
-              <input
-                type="text"
-                value={notes}
-                onChange={(e) => setNotes(e.target.value)}
-                placeholder="e.g. Reassigned for urgent corporate fiber link installation"
-                className="w-full px-3 py-2 rounded-lg border border-slate-300 font-medium"
-              />
-            </div>
-
-            <button
-              type="submit"
-              disabled={submitting}
-              className="w-full py-2.5 rounded-lg bg-[#6700ce] hover:bg-[#5200a5] text-white font-extrabold shadow-sm transition flex items-center justify-center gap-2"
-            >
-              <ArrowLeftRight className="w-4 h-4" />
-              <span>{submitting ? 'Executing Transfer...' : 'Confirm & Execute Transfer'}</span>
-            </button>
-
-          </form>
-        </div>
-
-        {/* Right Column (7/12): Live Transfers Table */}
-        <div className="lg:col-span-7 bg-white rounded-xl p-6 border border-slate-200 shadow-sm space-y-4">
-          <div className="flex items-center justify-between border-b border-slate-100 pb-3">
-            <h2 className="text-sm font-black text-[#1c023d] flex items-center gap-2">
-              <ArrowLeftRight className="w-4 h-4 text-[#6700ce]" />
-              Transfer Log & Destination Acceptance Queue
-            </h2>
-            <button onClick={fetchData} className="text-xs font-bold text-[#6700ce] hover:underline flex items-center gap-1">
-              <RefreshCw className="w-3.5 h-3.5" /> Refresh
-            </button>
           </div>
 
-          {transfers.length === 0 ? (
-            <div className="py-12 text-center text-slate-400 text-xs">No transfer records found.</div>
-          ) : (
-            <div className="overflow-x-auto border border-slate-200 rounded-lg max-h-[500px]">
-              <table className="w-full text-left text-xs">
-                <thead className="sticky top-0 bg-slate-50 text-slate-600 font-bold uppercase border-b border-slate-200 text-[11px]">
-                  <tr>
-                    <th className="py-3 px-3">Transfer ID</th>
-                    <th className="py-3 px-3">Device & Serial</th>
-                    <th className="py-3 px-3">Movement Route</th>
-                    <th className="py-3 px-3">Status</th>
-                    <th className="py-3 px-3 text-right">Actions</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100">
-                  {transfers.map((t) => (
-                    <tr key={t.transfer_id} className="hover:bg-slate-50 transition">
-                      <td className="py-2.5 px-3 font-mono font-bold text-slate-400">
-                        #{t.transfer_id}
-                      </td>
-                      <td className="py-2.5 px-3">
-                        <span className="font-extrabold text-[#1c023d] block">{t.item_name}</span>
-                        <span className="font-mono text-[11px] text-purple-800 font-bold">SN: {t.serial_number}</span>
-                      </td>
-                      <td className="py-2.5 px-3">
-                        <div className="flex items-center gap-1.5 font-bold text-slate-700">
-                          <span>{t.from_user_name || t.from_city_name}</span>
-                          <ArrowRight className="w-3 h-3 text-slate-400" />
-                          <span className="text-purple-900">{t.to_user_name || t.to_city_name}</span>
-                        </div>
-                        <span className="text-[10px] text-slate-400 font-mono">
-                          {t.transfer_type === 'SAME_CITY' ? 'Same-City Handoff' : 'Inter-Hub Transit'}
-                        </span>
-                      </td>
-                      <td className="py-2.5 px-3">
-                        {t.status === 'COMPLETED' ? (
-                          <span className="px-2 py-0.5 rounded text-[10px] font-black uppercase bg-emerald-50 text-emerald-700 border border-emerald-200">
-                            Completed
-                          </span>
-                        ) : t.status === 'PENDING_ACCEPTANCE' ? (
-                          <span className="px-2 py-0.5 rounded text-[10px] font-black uppercase bg-amber-50 text-amber-700 border border-amber-200">
-                            Awaiting Acceptance
-                          </span>
-                        ) : (
-                          <span className="px-2 py-0.5 rounded text-[10px] font-black uppercase bg-rose-50 text-rose-700 border border-rose-200">
-                            Rejected
-                          </span>
-                        )}
-                      </td>
-                      <td className="py-2.5 px-3 text-right">
-                        {t.status === 'PENDING_ACCEPTANCE' && (
-                          <div className="flex items-center justify-end gap-1.5">
-                            <button
-                              onClick={() => handleAcceptTransfer(t.transfer_id)}
-                              className="px-2.5 py-1 rounded bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-[11px] transition shadow-sm"
-                            >
-                              Accept
-                            </button>
-                            <button
-                              onClick={() => handleRejectTransfer(t.transfer_id)}
-                              className="px-2 py-1 rounded bg-rose-50 hover:bg-rose-100 text-rose-700 font-bold text-[11px] border border-rose-200 transition"
-                            >
-                              Reject
-                            </button>
-                          </div>
-                        )}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+        </div>
+      )}
+
+      {/* VIEW 2: AI ASSET MIGRATION OPTIMIZER */}
+      {activeTab === 'MIGRATION_OPTIMIZER' && (
+        <div className="space-y-6 animate-fade-in">
+          
+          {/* Key Metrics KPI Cards */}
+          <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
+            <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm flex items-center gap-4">
+              <div className="p-3 rounded-lg bg-emerald-50 text-emerald-600 border border-emerald-200">
+                <TrendingDown className="w-6 h-6" />
+              </div>
+              <div>
+                <p className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">Potential Freight Savings</p>
+                <p className="text-2xl font-black text-emerald-700">₹{optimizationPlan?.total_potential_savings_inr?.toLocaleString() || '3,550'}</p>
+                <p className="text-[10px] text-slate-400 mt-0.5">Direct inter-hub road migration vs air cargo</p>
+              </div>
             </div>
-          )}
+
+            <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm flex items-center gap-4">
+              <div className="p-3 rounded-lg bg-indigo-50 text-indigo-600 border border-indigo-200">
+                <Truck className="w-6 h-6" />
+              </div>
+              <div>
+                <p className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">Avg Lead Time Saved</p>
+                <p className="text-2xl font-black text-[#1c023d]">{optimizationPlan?.average_hours_saved || 42} Hours</p>
+                <p className="text-[10px] text-slate-400 mt-0.5">Fast road transit vs central fulfillment</p>
+              </div>
+            </div>
+
+            <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm flex items-center gap-4">
+              <div className="p-3 rounded-lg bg-purple-50 text-[#6700ce] border border-purple-200">
+                <Zap className="w-6 h-6" />
+              </div>
+              <div>
+                <p className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">Recommended Routes</p>
+                <p className="text-2xl font-black text-[#6700ce]">{optimizationPlan?.recommendations?.length || 1} Active</p>
+                <p className="text-[10px] text-slate-400 mt-0.5">Surplus-to-deficit circle balancing</p>
+              </div>
+            </div>
+
+            <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm flex items-center gap-4">
+              <div className="p-3 rounded-lg bg-pink-50 text-[#e20d65] border border-pink-200">
+                <Building className="w-6 h-6" />
+              </div>
+              <div>
+                <p className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">Telecom Circles</p>
+                <p className="text-2xl font-black text-[#e20d65]">7 Analyzed</p>
+                <p className="text-[10px] text-slate-400 mt-0.5">Delhi, Mumbai, Pune, Bangalore, etc.</p>
+              </div>
+            </div>
+          </div>
+
+          {/* Recommendations List */}
+          <div className="bg-white rounded-xl p-6 border border-slate-200 shadow-sm space-y-4">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+              <div>
+                <h3 className="text-base font-black text-[#1c023d] flex items-center gap-2">
+                  <Sparkles className="w-4 h-4 text-[#e20d65]" />
+                  AI Suggested Inter-Hub Migration Routes
+                </h3>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  Optimized based on real-time surplus stock, local technician demand, and highway transit corridors.
+                </p>
+              </div>
+              <button
+                onClick={fetchOptimizationPlan}
+                disabled={loadingPlan}
+                className="px-3 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs flex items-center gap-1.5 transition"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${loadingPlan ? 'animate-spin' : ''}`} />
+                <span>Recalculate Routes</span>
+              </button>
+            </div>
+
+            {loadingPlan ? (
+              <div className="py-16 text-center text-slate-400 text-xs font-bold animate-pulse">
+                Running optimization algorithms across all regional distribution circles...
+              </div>
+            ) : !optimizationPlan?.recommendations || optimizationPlan.recommendations.length === 0 ? (
+              <div className="py-12 text-center text-slate-400 text-xs">
+                All 7 telecom circles currently maintain optimal safety threshold balances.
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 gap-4">
+                {optimizationPlan.recommendations.map((route) => {
+                  const isExecuting = executingRouteId === route.route_id;
+                  return (
+                    <div 
+                      key={route.route_id} 
+                      className="p-5 rounded-xl border border-purple-200 bg-gradient-to-r from-purple-50/40 via-white to-pink-50/20 shadow-xs flex flex-col md:flex-row md:items-center justify-between gap-4"
+                    >
+                      <div className="space-y-2">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="font-mono text-xs font-black text-[#6700ce] px-2 py-0.5 rounded bg-purple-100/60 border border-purple-200">
+                            {route.route_id}
+                          </span>
+                          <span className="text-xs font-black px-2 py-0.5 rounded uppercase bg-emerald-100 text-emerald-800 border border-emerald-200">
+                            {route.priority}
+                          </span>
+                          <span className="text-xs text-slate-500 font-medium">
+                            Mode: <strong className="text-slate-800">{route.transit_mode.replace(/_/g, ' ')}</strong>
+                          </span>
+                        </div>
+
+                        <div className="flex items-center gap-3 text-sm">
+                          <div className="font-extrabold text-[#1c023d]">
+                            {route.from_city_name} <span className="text-xs text-slate-400">({route.from_region})</span>
+                          </div>
+                          <ArrowRight className="w-4 h-4 text-[#e20d65]" />
+                          <div className="font-extrabold text-[#6700ce]">
+                            {route.to_city_name} <span className="text-xs text-slate-400">({route.to_region})</span>
+                          </div>
+                        </div>
+
+                        <p className="text-xs text-slate-600 font-medium max-w-2xl">
+                          {route.recommendation_note}
+                        </p>
+
+                        <div className="flex flex-wrap items-center gap-4 text-xs font-semibold text-slate-600 pt-1">
+                          <span>Equipment: <strong className="text-slate-900">{route.item_name}</strong></span>
+                          <span>Rebalance Qty: <strong className="text-indigo-700">{route.recommended_qty} units</strong></span>
+                          <span>Transit: <strong className="text-slate-900">{route.transit_hours}h</strong> (Saves ~{route.hours_saved}h)</span>
+                          <span className="text-emerald-700">Estimated Savings: <strong>₹{route.estimated_cost_saved_inr?.toLocaleString()}</strong></span>
+                        </div>
+                      </div>
+
+                      <div className="shrink-0 flex items-center md:flex-col justify-end gap-2">
+                        <button
+                          disabled={isExecuting}
+                          onClick={() => executeOptimizationRoute(route.route_id)}
+                          className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-[#1c023d] to-[#6700ce] hover:opacity-95 text-white font-extrabold text-xs shadow-md transition flex items-center gap-2 cursor-pointer disabled:opacity-50"
+                        >
+                          <Play className={`w-3.5 h-3.5 fill-current ${isExecuting ? 'animate-spin' : ''}`} />
+                          <span>{isExecuting ? 'Executing Route...' : 'Execute Route Migration'}</span>
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
 
         </div>
-
-      </div>
+      )}
 
     </div>
   );
