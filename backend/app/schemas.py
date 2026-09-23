@@ -85,6 +85,8 @@ class UserAdminOut(BaseModel):
     city_id: Optional[int] = None
     location_id: Optional[int] = None
     location_name: Optional[str] = None
+    territory_ids: Optional[List[int]] = []
+    territory_names: Optional[List[str]] = []
     is_active: bool = True
     is_leaving: Optional[bool] = False
     clearance_status: Optional[str] = "ACTIVE"
@@ -100,7 +102,11 @@ class UserCreateRequest(BaseModel):
     region_id: Optional[int] = None
     location_id: Optional[int] = None
     city_id: Optional[int] = None
+    territory_ids: Optional[List[int]] = None
     password: str
+
+class UserTerritoriesUpdateRequest(BaseModel):
+    territory_ids: List[int]
 
 class UserResetPasswordRequest(BaseModel):
     new_password: str
@@ -664,4 +670,58 @@ class LakshyaSyncResponse(BaseModel):
     created_count: int
     updated_count: int
     synced_users: List[dict]
+
+# Asset Migration & Optimization Schemas
+class BatchAssetMigrationRequest(BaseModel):
+    asset_ids: List[int]
+    to_city_id: int
+    to_user_id: Optional[int] = None
+    migration_reason: str = "Territory Rebalancing & Asset Migration"
+    notes: Optional[str] = None
+
+class BatchAssetMigrationResponse(BaseModel):
+    migrated_count: int
+    failed_count: int
+    from_city_name: Optional[str] = None
+    to_city_name: str
+    recipient_name: Optional[str] = None
+    migrated_assets: List[dict]
+    message: str
+
+class MigrationOptimizationRoute(BaseModel):
+    route_id: str
+    item_id: int
+    variant_id: Optional[int] = None
+    item_name: str
+    variant_name: Optional[str] = None
+    from_city_id: int
+    from_city_name: str
+    from_region: str
+    to_city_id: int
+    to_city_name: str
+    to_region: str
+    surplus_qty: int
+    deficit_qty: int
+    recommended_qty: int
+    unit_cost_inr: float
+    estimated_cost_saved_inr: float
+    transit_mode: str # "SAME_REGION_EXPRESS_ROAD", "INTER_REGION_LOGISTICS"
+    transit_hours: int
+    hours_saved: int
+    priority: str # "CRITICAL_DEFICIT", "OPTIMAL_BALANCE", "SURPLUS_RELIEF"
+    recommendation_note: str
+
+class MigrationOptimizationPlanResponse(BaseModel):
+    status: str
+    total_potential_savings_inr: float
+    total_units_rebalanced: int
+    total_routes_count: int
+    average_hours_saved: int
+    recommendations: List[MigrationOptimizationRoute]
+    telecom_circles_analyzed: List[str]
+    generated_at: datetime
+    message: str
+
+class ExecuteMigrationPlanRequest(BaseModel):
+    route_ids: Optional[List[str]] = None
 

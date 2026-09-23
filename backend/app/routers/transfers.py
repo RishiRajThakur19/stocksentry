@@ -9,9 +9,15 @@ from ..models import (
     AssetStatusEnum, RoleEnum
 )
 from ..schemas import (
-    AssetTransferCreateSameCity, AssetTransferCreateCrossCity, AssetTransferOut
+    AssetTransferCreateSameCity, AssetTransferCreateCrossCity, AssetTransferOut,
+    BatchAssetMigrationRequest, BatchAssetMigrationResponse, 
+    MigrationOptimizationPlanResponse, ExecuteMigrationPlanRequest
 )
-from ..auth import get_current_user, require_manager_or_above
+from ..services.migration_optimizer import (
+    generate_migration_optimization_plan, execute_migration_plan,
+    batch_migrate_serialized_assets
+)
+from ..auth import get_current_user, require_manager_or_above, require_regional_or_super_admin
 
 router = APIRouter(prefix="/api/transfers", tags=["Asset Transfers"])
 
@@ -243,3 +249,55 @@ def _build_transfer_out(t: AssetTransfer, db: Session) -> AssetTransferOut:
         created_at=t.created_at,
         completed_at=t.completed_at
     )
+
+@router.get("/migration-optimizer", response_model=MigrationOptimizationPlanResponse)
+def get_migration_optimization_plan(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Computes real-time inter-territory asset migration optimization routes.
+    Balances surplus stocks against deficit/low-stock hubs to minimize freight costs and lead times.
+    """
+    plan = generate_migration_optimization_plan(db)
+    return MigrationOptimizationPlanResponse(**plan)
+
+@router.post("/execute-optimization")
+def execute_optimization_routes(
+    payload: Optional[ExecuteMigrationPlanRequest] = None,
+    current_user: User = Depends(require_regional_or_super_admin),
+    db: Session = Depends(get_db)
+):
+    """
+    Executes recommended migration routes, automatically adjusting stock and rebalancing hubs.
+    """
+    route_ids = payload.route_ids if payload else None
+    result = execute_migration_plan(
+        db=db,
+        route_ids=route_ids,
+        user_id=current_user.user_id,
+        user_name=current_user.name
+    )
+    return result
+
+@router.post("/batch-migrate", response_model=BatchAssetMigrationResponse)
+def batch_migrate_assets(
+    payload: BatchAssetMigrationRequest,
+    current_user: User = Depends(require_manager_or_above),
+    db: Session = Depends(get_db)
+):
+    """
+    Batch migrates an entire array of physical serialized hardware assets to a new territory or personnel.
+    """
+    try:
+        result = batch_migrate_serialized_assets(
+            db=db,
+            asset_ids=payload.asset_ids,
+            to_city_id=payload.to_city_id,
+            to_user_id=payload.to_user_id,
+            migration_reason=payload.migration_reason,
+            performed_by_user_id=current_user.user_id
+        )
+        return BatchAssetMigrationResponse(**result)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))

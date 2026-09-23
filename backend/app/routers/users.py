@@ -11,7 +11,7 @@ from ..models import User, Location, Region, AssetUnit, RoleEnum, Item, ItemVari
 from ..schemas import (
     UserAdminOut, UserCreateRequest, UserResetPasswordRequest, 
     BulkUploadPreviewResponse, BulkUserRowPreview, EnterpriseIngestSummary,
-    LakshyaSyncRequest, LakshyaSyncResponse
+    LakshyaSyncRequest, LakshyaSyncResponse, UserTerritoriesUpdateRequest
 )
 from ..services.lakshya_crm_service import sync_lakshya_workforce_to_db, DEFAULT_LAKSHYA_CRM_URL
 from ..auth import (
@@ -40,6 +40,8 @@ def to_user_admin_out(u: User, db: Session) -> UserAdminOut:
         city_id=u.city_id,
         location_id=u.city_id,
         location_name=loc.name if loc else ("All Regional Hubs" if u.role == RoleEnum.REGIONAL_ADMIN.value else "Global Operations"),
+        territory_ids=u.territory_ids,
+        territory_names=u.territory_names,
         is_active=bool(u.is_active),
         is_leaving=bool(u.is_leaving),
         clearance_status=u.clearance_status or "ACTIVE",
@@ -66,8 +68,11 @@ def get_users(
             (User.region_id == current_user.region_id) | (User.city_id.in_(city_ids))
         ).all()
     elif current_user.role == RoleEnum.MANAGER.value:
-        user_city_id = current_user.city_id or current_user.location_id
-        users = db.query(User).filter(User.city_id == user_city_id).all()
+        manager_territories = current_user.territory_ids
+        users = db.query(User).filter(
+            (User.city_id.in_(manager_territories)) | 
+            (User.territories.any(Location.location_id.in_(manager_territories)))
+        ).distinct().all()
     else:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access forbidden: Insufficient permissions to view users")
 
@@ -103,13 +108,54 @@ def create_user(
         region_id=assigned_region_id if req.role == RoleEnum.REGIONAL_ADMIN.value else None,
         city_id=assigned_city_id if req.role in [RoleEnum.MANAGER.value, RoleEnum.FIELD_WORKER.value] else None
     )
+    
+    # Assign multiple territories if provided
+    if req.territory_ids:
+        locs = db.query(Location).filter(Location.location_id.in_(req.territory_ids)).all()
+        new_user.territories = locs
+        if not new_user.city_id and locs:
+            new_user.city_id = locs[0].location_id
+
     db.add(new_user)
     db.commit()
     db.refresh(new_user)
 
-    log_audit(db, "CREATE_USER", f"{current_user.name} ({current_user.role}) created user '{new_user.email}' as {new_user.role}", current_user.user_id, current_user.name, current_user.role)
+    log_audit(db, "CREATE_USER", f"{current_user.name} ({current_user.role}) created user '{new_user.email}' as {new_user.role} with territories {[t.name for t in new_user.territories]}", current_user.user_id, current_user.name, current_user.role)
 
     return to_user_admin_out(new_user, db)
+
+@router.put("/{user_id}/territories", response_model=UserAdminOut)
+def update_user_territories(
+    user_id: int,
+    payload: UserTerritoriesUpdateRequest,
+    current_user: User = Depends(require_regional_or_super_admin),
+    db: Session = Depends(get_db)
+):
+    """
+    Assigns multiple telecom territories / city hubs to a manager or field worker.
+    """
+    target_user = db.query(User).filter(User.user_id == user_id).first()
+    if not target_user:
+        raise HTTPException(status_code=404, detail="User not found.")
+
+    locs = db.query(Location).filter(Location.location_id.in_(payload.territory_ids)).all()
+    target_user.territories = locs
+    if payload.territory_ids and not target_user.city_id:
+        target_user.city_id = payload.territory_ids[0]
+
+    db.commit()
+    db.refresh(target_user)
+
+    log_audit(
+        db=db,
+        action="USER_TERRITORIES_ASSIGNED",
+        details=f"Assigned {len(locs)} territories {[l.name for l in locs]} to {target_user.name} ({target_user.email})",
+        user_id=current_user.user_id,
+        user_name=current_user.name,
+        user_role=current_user.role
+    )
+
+    return to_user_admin_out(target_user, db)
 
 @router.get("/template")
 def download_user_excel_template():

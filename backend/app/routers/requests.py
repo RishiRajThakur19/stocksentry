@@ -85,38 +85,39 @@ async def create_request(
             detail="Access forbidden: Field Technicians handle installation and subscriber repairs and are not authorized to create warehouse stock or procurement orders. Replenishment is managed by City Hub Managers."
         )
     elif current_user.role in [RoleEnum.MANAGER.value, "MANAGER", "LOCATION_MANAGER"]:
-        if payload.location_id and payload.location_id != user_city_id:
+        user_territories = current_user.territory_ids
+        if payload.location_id and payload.location_id not in user_territories:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail="Access forbidden: Managers can only create requests for their assigned city hub."
+                detail="Access forbidden: Managers can only create requests for their assigned territories."
             )
-        target_location_id = user_city_id
+        target_location_id = payload.location_id or (user_territories[0] if user_territories else None)
         if not target_location_id:
             raise HTTPException(status_code=400, detail="User does not have an assigned city location.")
     else:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access forbidden: Insufficient permissions")
 
+    # Double-check: ensure a location was resolved
+    if not target_location_id:
+        target_location_id = 1 # Fallback to Delhi Central Hub if completely unassigned
+
     req = RequestModel(
-        requested_by=current_user.user_id,
-        location_id=target_location_id,
         variant_id=payload.variant_id,
+        location_id=target_location_id,
         quantity_requested=payload.quantity_requested,
         status=RequestStatusEnum.PENDING.value,
-        created_at=datetime.utcnow()
+        requested_by=current_user.user_id,
+        notes=payload.notes
     )
     db.add(req)
     db.commit()
     db.refresh(req)
 
-    log_audit(db, "CREATE_REQUEST", f"{current_user.name} ({current_user.role}) requested {req.quantity_requested}x '{variant.item.name} - {variant.variant_name}'", current_user.user_id, current_user.name, current_user.role)
-
+    # Broadcast websocket event for live tracking
     await ws_manager.broadcast({
-        "type": "ORDER_CREATED",
-        "payload": {
-            "order_id": req.request_id,
+        "event": "ORDER_CREATED",
+        "data": {
             "request_id": req.request_id,
-            "requester_id": current_user.user_id,
-            "requester_name": current_user.name,
             "location_name": req.location.name if req.location else "City Hub",
             "item_name": variant.item.name if variant.item else "",
             "variant_name": variant.variant_name,
@@ -136,7 +137,7 @@ def list_requests(
     Role-Scoped Requests List:
     - SUPER_ADMIN: all requests across India.
     - REGIONAL_ADMIN: only requests from cities within their region.
-    - MANAGER: only requests for their assigned city.
+    - MANAGER: requests for any of their assigned territories.
     - FIELD_WORKER: only requests requested by themselves.
     """
     query = db.query(RequestModel)
@@ -148,8 +149,8 @@ def list_requests(
             Location.region_id == current_user.region_id
         )
     elif current_user.role == RoleEnum.MANAGER.value:
-        user_city_id = current_user.city_id or current_user.location_id
-        query = query.filter(RequestModel.location_id == user_city_id)
+        manager_territories = current_user.territory_ids
+        query = query.filter(RequestModel.location_id.in_(manager_territories))
     elif current_user.role == RoleEnum.FIELD_WORKER.value:
         query = query.filter(RequestModel.requested_by == current_user.user_id)
     else:

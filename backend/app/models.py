@@ -1,8 +1,15 @@
-from sqlalchemy import Column, Integer, String, Float, DateTime, ForeignKey, Boolean, Text
+from sqlalchemy import Column, Integer, String, Float, DateTime, ForeignKey, Boolean, Text, Table
 from sqlalchemy.orm import relationship
 from datetime import datetime
 import enum
 from .database import Base
+
+user_territories = Table(
+    "user_territories",
+    Base.metadata,
+    Column("user_id", Integer, ForeignKey("users.user_id", ondelete="CASCADE"), primary_key=True),
+    Column("location_id", Integer, ForeignKey("locations.location_id", ondelete="CASCADE"), primary_key=True)
+)
 
 class RoleEnum(str, enum.Enum):
     SUPER_ADMIN = "SUPER_ADMIN"
@@ -89,6 +96,21 @@ class User(Base):
     city_location = relationship("Location", back_populates="users", foreign_keys=[city_id])
     assigned_assets = relationship("AssetUnit", back_populates="holder", foreign_keys="AssetUnit.current_holder_id")
     noc_records = relationship("NOCRecord", back_populates="user", foreign_keys="NOCRecord.user_id")
+    territories = relationship("Location", secondary=user_territories, backref="assigned_users")
+
+    @property
+    def territory_ids(self):
+        t_ids = [t.location_id for t in self.territories] if self.territories else []
+        if self.city_id and self.city_id not in t_ids:
+            t_ids.insert(0, self.city_id)
+        return t_ids
+
+    @property
+    def territory_names(self):
+        t_names = [t.name for t in self.territories] if self.territories else []
+        if self.city_location and self.city_location.name not in t_names:
+            t_names.insert(0, self.city_location.name)
+        return t_names
 
 class RepairLocation(Base):
     """
