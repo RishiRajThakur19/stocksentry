@@ -25,7 +25,10 @@ import {
   Sparkles,
   CheckSquare,
   Wifi,
-  BookOpen
+  BookOpen,
+  Scan,
+  Smartphone,
+  Radio
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 
@@ -33,6 +36,8 @@ export const Sidebar = ({
   activeTab, 
   setActiveTab, 
   pendingRequestsCount = 0, 
+  pendingFieldReqsCount = 0,
+  myTechDeliveriesCount = 0,
   openAlertsCount = 0,
   userRole = 'MANAGER',
   locationName = '',
@@ -59,6 +64,12 @@ export const Sidebar = ({
         subItems: []
       },
       {
+        id: 'predictive-ai',
+        label: 'Predictive AI Forecasting',
+        icon: Sparkles,
+        subItems: []
+      },
+      {
         id: 'central-stock',
         label: 'Stock & Regional Matrix',
         icon: Warehouse,
@@ -66,6 +77,20 @@ export const Sidebar = ({
           { id: 'central-stock', label: 'Central Warehouse Stock' },
           { id: 'regional-stock', label: 'Regional Matrix (Fold/Unfold)' }
         ]
+      },
+      {
+        id: 'field-assign',
+        label: 'Assign Stock to Field',
+        icon: PackagePlus,
+        subItems: []
+      },
+      {
+        id: 'field-requisitions',
+        label: 'Field Tech Requests',
+        icon: ShoppingBag,
+        badge: pendingFieldReqsCount > 0 ? pendingFieldReqsCount : null,
+        badgeColor: 'bg-[#e20d65] text-white',
+        subItems: []
       },
       {
         id: 'requests',
@@ -77,7 +102,8 @@ export const Sidebar = ({
           { id: 'requests', label: 'Global Requests Queue' },
           { id: 'tracking', label: 'In-Transit Dispatch Tracking' },
           { id: 'transfers', label: 'Direct Asset Transfers' },
-          { id: 'receive-stock', label: 'Receive Vendor Stock' }
+          { id: 'receive-stock', label: 'Receive Vendor Stock' },
+          { id: 'bulk-serials', label: 'Bulk Serial Intake & QR' }
         ]
       },
       {
@@ -87,6 +113,9 @@ export const Sidebar = ({
         subItems: [
           { id: 'lifecycle', label: 'Serial Lifecycle Audit' },
           { id: 'repairs', label: 'Repair & Scrap Governance' },
+          { id: 'loss-reports', label: 'Lost & Stolen Assets' },
+          { id: 'audits', label: 'Stock Audits & Counts' },
+          { id: 'tickets', label: 'Support Helpdesk' },
           { id: 'offboarding', label: 'Staff Onboarding & NOC' },
           { id: 'create-product', label: 'Catalog / Add Product' }
         ]
@@ -112,6 +141,26 @@ export const Sidebar = ({
         id: 'dashboard',
         label: 'Regional Dashboard',
         icon: LayoutDashboard,
+        subItems: []
+      },
+      {
+        id: 'predictive-ai',
+        label: 'Predictive Stockout AI',
+        icon: Sparkles,
+        subItems: []
+      },
+      {
+        id: 'field-assign',
+        label: 'Assign Stock to Field',
+        icon: PackagePlus,
+        subItems: []
+      },
+      {
+        id: 'field-requisitions',
+        label: 'Field Tech Requests',
+        icon: ShoppingBag,
+        badge: pendingFieldReqsCount > 0 ? pendingFieldReqsCount : null,
+        badgeColor: 'bg-[#e20d65] text-white',
         subItems: []
       },
       {
@@ -141,6 +190,9 @@ export const Sidebar = ({
         subItems: [
           { id: 'repairs', label: 'Repair & Scrap Approvals' },
           { id: 'lifecycle', label: 'Asset Lifecycle Audit' },
+          { id: 'loss-reports', label: 'Lost & Stolen Assets' },
+          { id: 'audits', label: 'Stock Audits & Counts' },
+          { id: 'tickets', label: 'Support Helpdesk' },
           { id: 'offboarding', label: 'Personnel Onboarding & NOC' }
         ]
       },
@@ -153,6 +205,7 @@ export const Sidebar = ({
         subItems: [
           { id: 'users-mgmt', label: 'Regional Personnel' },
           { id: 'bulk-upload', label: 'Excel Bulk Onboarding' },
+          { id: 'analytics', label: 'Lifecycle Analytics' },
           { id: 'alerts', label: 'Regional Alerts' }
         ]
       }
@@ -166,9 +219,29 @@ export const Sidebar = ({
         subItems: []
       },
       {
+        id: 'predictive-ai',
+        label: 'AI Stockout Forecast',
+        icon: Sparkles,
+        subItems: []
+      },
+      {
         id: 'request-form',
         label: 'Stock Refill Store',
         icon: ShoppingBag,
+        subItems: []
+      },
+      {
+        id: 'field-assign',
+        label: 'Assign Stock to Field',
+        icon: PackagePlus,
+        subItems: []
+      },
+      {
+        id: 'field-requisitions',
+        label: 'Field Tech Requests',
+        icon: FileCheck,
+        badge: pendingFieldReqsCount > 0 ? pendingFieldReqsCount : null,
+        badgeColor: 'bg-[#e20d65] text-white',
         subItems: []
       },
       {
@@ -198,6 +271,9 @@ export const Sidebar = ({
         subItems: [
           { id: 'lifecycle', label: 'Asset Lifecycle Audit' },
           { id: 'repairs', label: 'City Repairs & Faults' },
+          { id: 'loss-reports', label: 'Lost & Stolen Assets' },
+          { id: 'audits', label: 'Stock Audits & Counts' },
+          { id: 'tickets', label: 'Support Helpdesk' },
           { id: 'transfers', label: 'Direct Asset Transfers' },
           { id: 'users-mgmt', label: 'Field Technicians' },
           { id: 'offboarding', label: 'Tech Onboarding & NOC' }
@@ -214,6 +290,24 @@ export const Sidebar = ({
         subItems: []
       },
       {
+        id: 'field-requisitions',
+        label: 'Request Gear & Supplies',
+        icon: ShoppingBag,
+        subItems: []
+      },
+      {
+        id: 'tickets',
+        label: 'Support Helpdesk',
+        icon: FileText,
+        subItems: []
+      },
+      {
+        id: 'loss-reports',
+        label: 'Report Lost / Stolen',
+        icon: AlertTriangle,
+        subItems: []
+      },
+      {
         id: 'wifi-setup',
         label: 'Subscriber Wi-Fi & ONT Setup',
         icon: Wifi,
@@ -223,6 +317,8 @@ export const Sidebar = ({
         id: 'my-assets',
         label: 'My Assigned Toolbag',
         icon: ShieldCheck,
+        badge: myTechDeliveriesCount > 0 ? myTechDeliveriesCount : null,
+        badgeColor: 'bg-[#e20d65] text-white',
         subItems: []
       },
       {

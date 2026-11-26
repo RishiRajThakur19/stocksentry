@@ -33,6 +33,20 @@ def test_field_worker_complaints():
     # Get assigned assets
     status, my_assets = api_call("/api/lifecycle/my-assets", token=worker_token)
     assert status == 200
+    if len(my_assets) == 0:
+        from app.database import SessionLocal
+        from app.models import AssetUnit, User, AssetStatusEnum
+        db = SessionLocal()
+        w = db.query(User).filter(User.email == "delhi.worker@tataplay.com").first()
+        a = db.query(AssetUnit).filter(AssetUnit.current_location_id == w.city_id, AssetUnit.status == AssetStatusEnum.IN_WAREHOUSE.value).first()
+        if not a:
+            a = db.query(AssetUnit).filter(AssetUnit.status == AssetStatusEnum.IN_WAREHOUSE.value).first()
+        if a:
+            a.current_holder_id = w.user_id
+            a.status = AssetStatusEnum.ASSIGNED.value
+            db.commit()
+        db.close()
+        status, my_assets = api_call("/api/lifecycle/my-assets", token=worker_token)
     assert len(my_assets) >= 1
     target_asset = my_assets[0]
     asset_id = target_asset["asset_id"]

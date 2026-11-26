@@ -237,6 +237,12 @@ def get_my_assigned_assets(
         variant = a.variant
         item = variant.item if variant else None
         loc = a.location
+        assign_ev = db.query(AssetLifecycleEvent).filter(
+            AssetLifecycleEvent.asset_id == a.asset_id,
+            AssetLifecycleEvent.to_holder_id == current_user.user_id,
+            AssetLifecycleEvent.event_type.in_(["ASSIGNED", "TRANSFERRED"])
+        ).order_by(AssetLifecycleEvent.timestamp.desc()).first()
+        assigner = assign_ev.actor if assign_ev and assign_ev.actor else None
 
         out.append(AssetUnitOut(
             asset_id=a.asset_id,
@@ -255,7 +261,11 @@ def get_my_assigned_assets(
             category=item.category if item else None,
             description=item.description if item else None,
             unit_cost=variant.unit_cost if variant else 0.0,
-            image_url=item.image_url if item else None
+            image_url=item.image_url if item else None,
+            tech_delivery_status=getattr(a, "tech_delivery_status", "DELIVERED") or "DELIVERED",
+            assigned_by_name=assigner.name if assigner else "City Hub Manager",
+            assigned_at=assign_ev.timestamp if assign_ev else a.created_at,
+            assignment_notes=assign_ev.notes if assign_ev else None,
         ))
 
     return out

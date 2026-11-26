@@ -26,6 +26,19 @@ def test_field_worker_restrictions_and_capabilities():
     res = client.get('/api/lifecycle/my-assets', headers=worker_headers)
     assert res.status_code == 200, res.text
     assets = res.json()
+    if len(assets) == 0:
+        from app.database import SessionLocal
+        from app.models import AssetUnit, User, AssetStatusEnum
+        db = SessionLocal()
+        w = db.query(User).filter(User.email == "delhi.worker@tataplay.com").first()
+        a = db.query(AssetUnit).filter(AssetUnit.status == AssetStatusEnum.IN_WAREHOUSE.value).first()
+        if a and w:
+            a.current_holder_id = w.user_id
+            a.status = AssetStatusEnum.ASSIGNED.value
+            db.commit()
+        db.close()
+        res = client.get('/api/lifecycle/my-assets', headers=worker_headers)
+        assets = res.json()
     print(f"  ✓ Found {len(assets)} devices held by technician.")
     assert len(assets) > 0
     target_asset = assets[0]

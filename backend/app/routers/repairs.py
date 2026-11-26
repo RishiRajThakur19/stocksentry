@@ -394,6 +394,18 @@ def complete_repair_action(
         )
         db.add(event)
 
+    # Sync resolution comment to any linked Support Ticket
+    from ..models import Ticket, TicketComment
+    linked_ticket = db.query(Ticket).filter(Ticket.related_repair_id == req.repair_request_id).first()
+    if linked_ticket:
+        db.add(TicketComment(
+            ticket_id=linked_ticket.ticket_id,
+            author_id=current_user.user_id,
+            body=f"Repair Request #{req.repair_request_id} resolved with action: {payload.resolution_action}. {payload.notes or ''}".strip(),
+            is_internal=False,
+            created_at=datetime.utcnow(),
+        ))
+
     db.commit()
     db.refresh(req)
     return _build_repair_out(req, db)

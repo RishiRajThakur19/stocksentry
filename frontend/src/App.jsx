@@ -25,6 +25,13 @@ import { BulkUploadPage } from './pages/BulkUploadPage';
 import { RegionalStockMatrixSection } from './pages/RegionalStockMatrixSection';
 import { FieldWorkerDeskPage } from './pages/FieldWorkerDeskPage';
 import { StockTransferPage } from './pages/StockTransferPage';
+import { PredictiveForecastPage } from './pages/PredictiveForecastPage';
+import { FieldRequisitionsPage } from './pages/FieldRequisitionsPage';
+import { FieldBulkAssignPage } from './pages/FieldBulkAssignPage';
+import { TicketsPage } from './pages/TicketsPage';
+import { LossReportsPage } from './pages/LossReportsPage';
+import { StockAuditsPage } from './pages/StockAuditsPage';
+import { BulkSerialIntakePage } from './pages/BulkSerialIntakePage';
 import { Warehouse, Activity, ArrowLeftRight } from 'lucide-react';
 import { AICopilotAssistant } from './components/AICopilotAssistant';
 import { LocationSelectorModal } from './components/LocationSelectorModal';
@@ -33,7 +40,11 @@ import { OrderWorkflowModal } from './components/OrderWorkflowModal';
 import { Toast } from './components/Toast';
 
 const MainApp = () => {
-  const { user, loading } = useAuth();
+  const { user, loading, logout } = useAuth();
+  const [forcePwCurrent, setForcePwCurrent] = useState('');
+  const [forcePwNew, setForcePwNew] = useState('');
+  const [forcePwError, setForcePwError] = useState('');
+  const [forcePwSaving, setForcePwSaving] = useState(false);
   const [lifecycleInitialSerial, setLifecycleInitialSerial] = useState('');
   const [toasts, setToasts] = useState([]);
   const [refreshTrigger, setRefreshTrigger] = useState(0);
@@ -78,6 +89,10 @@ const MainApp = () => {
   const [locations, setLocations] = useState([]);
   const [alerts, setAlerts] = useState([]);
   const [requests, setRequests] = useState([]);
+  const [fieldRequisitions, setFieldRequisitions] = useState([]);
+  const [ticketsList, setTicketsList] = useState([]);
+  const [lossReportsList, setLossReportsList] = useState([]);
+  const [myTechDeliveriesCount, setMyTechDeliveriesCount] = useState(0);
   const [summary, setSummary] = useState(null);
   const [currentLocationId, setCurrentLocationId] = useState(user?.location_id || 1);
 
@@ -98,13 +113,16 @@ const MainApp = () => {
 
   const fetchData = useCallback(async () => {
     try {
-      const [itemRes, locRes, reqRes, stockRes, alertRes, sumRes] = await Promise.all([
+      const [itemRes, locRes, reqRes, stockRes, alertRes, sumRes, fieldReqRes, tktRes, lossRes] = await Promise.all([
         api.get('/inventory/items'),
         api.get('/inventory/locations'),
         api.get('/requests'),
         api.get('/inventory/stock'),
         api.get('/alerts'),
-        api.get('/analytics/summary')
+        api.get('/analytics/summary'),
+        api.get('/field-requisitions').catch(() => ({ data: [] })),
+        api.get('/tickets').catch(() => ({ data: [] })),
+        api.get('/loss-reports').catch(() => ({ data: [] }))
       ]);
       setItems(itemRes.data);
       setLocations(locRes.data);
@@ -112,6 +130,19 @@ const MainApp = () => {
       setStock(stockRes.data);
       setAlerts(alertRes.data);
       setSummary(sumRes.data);
+      setFieldRequisitions(fieldReqRes.data || []);
+      setTicketsList(tktRes.data || []);
+      setLossReportsList(lossRes.data || []);
+
+      if (user?.role === 'FIELD_WORKER') {
+        const [myA, myC] = await Promise.all([
+          api.get('/lifecycle/my-assets').catch(() => ({ data: [] })),
+          api.get('/field-requisitions/my-consumables').catch(() => ({ data: [] }))
+        ]);
+        const pendA = (myA.data || []).filter((a) => a.tech_delivery_status === 'DISPATCHED').length;
+        const pendC = (myC.data || []).filter((c) => c.delivery_status === 'DISPATCHED').length;
+        setMyTechDeliveriesCount(pendA + pendC);
+      }
     } catch (err) {
       console.error("Failed to fetch app data", err);
     }
@@ -196,6 +227,38 @@ const MainApp = () => {
         type: 'INFO',
         title: `🚚 Stock Dispatched In-Transit!`,
         message: `Request #${msg.payload.request_id} dispatched via ${msg.payload.carrier_name} (Tracking: ${msg.payload.tracking_number}).`
+      });
+    } else if (msg.type === 'FIELD_REQUISITION_CREATED' || msg.event === 'FIELD_REQUISITION_CREATED') {
+      const d = msg.data || {};
+      addToast({
+        dedupeKey: `field_req_${d.requisition_id}`,
+        type: 'INFO',
+        title: `🛠️ New Field Tech Request!`,
+        message: `${d.requester_name || 'Field Tech'} requested ${d.quantity_requested || 1}x ${d.item_name || 'Gear'} (${d.location_name || 'City Hub'}).`
+      });
+    } else if (msg.type === 'FIELD_REQUISITION_UPDATED') {
+      const d = msg.data || {};
+      addToast({
+        dedupeKey: `field_req_upd_${d.requisition_id}_${d.status}`,
+        type: d.status === 'REJECTED' ? 'WARNING' : 'SUCCESS',
+        title: `📋 Gear Request ${d.status}!`,
+        message: `REQ-${d.requisition_id} (${d.item_name}) was ${d.status?.toLowerCase()} by ${d.reviewer_name}.`
+      });
+    } else if (msg.type === 'FIELD_ASSIGNMENT_COMPLETED') {
+      const d = msg.data || {};
+      addToast({
+        dedupeKey: `field_assign_${d.item_name}_${Date.now()}`,
+        type: 'SUCCESS',
+        title: `📦 New Gear Assigned to You!`,
+        message: `${d.assigner_name} assigned ${d.quantity}x ${d.item_name} (${d.variant_name}) to your toolbag.`
+      });
+    } else if (msg.type === 'TICKET_CREATED' || msg.type === 'TICKET_UPDATED' || msg.type === 'TICKET_COMMENT') {
+      const d = msg.data || {};
+      addToast({
+        dedupeKey: `tkt_${d.ticket_id}_${msg.type}`,
+        type: 'INFO',
+        title: `🎫 Ticket ${d.ticket_code || ''} ${msg.type === 'TICKET_CREATED' ? 'Opened' : msg.type === 'TICKET_COMMENT' ? 'New Reply' : d.status}`,
+        message: d.subject || `Updated by ${d.author || 'Support'}`
       });
     } else if (msg.type === 'ORDER_FULFILLED') {
       addToast({
@@ -329,6 +392,9 @@ const MainApp = () => {
   const isCentralAdmin = user.role === 'CENTRAL_ADMIN' || user.role === 'SUPER_ADMIN';
   const isSuperAdmin = user.role === 'SUPER_ADMIN' || user.role === 'CENTRAL_ADMIN';
   const pendingRequestsCount = requests.filter(r => r.status === 'PENDING').length;
+  const pendingFieldReqsCount = fieldRequisitions.filter(r => r.status === 'PENDING').length;
+  const openTicketsCount = ticketsList.filter(t => !['RESOLVED', 'CLOSED'].includes(t.status)).length;
+  const pendingLossCount = lossReportsList.filter(l => l.status === 'PENDING_REGIONAL').length;
   const openAlertsCount = alerts.filter(a => a.status === 'OPEN').length;
 
   const isStockGroup = ['central-stock', 'available-stock', 'regional-stock'].includes(activeTab);
@@ -346,6 +412,65 @@ const MainApp = () => {
       });
     });
   });
+
+  if (user.must_change_password) {
+    return (
+      <div className="min-h-screen bg-[#1c023d] flex items-center justify-center p-6 font-sans">
+        <form
+          onSubmit={async (e) => {
+            e.preventDefault();
+            setForcePwError('');
+            setForcePwSaving(true);
+            try {
+              const res = await api.post('/auth/change-password', {
+                current_password: forcePwCurrent,
+                new_password: forcePwNew,
+              });
+              const { access_token, refresh_token, ...userData } = res.data;
+              localStorage.setItem('stocksentry_token', access_token);
+              if (refresh_token) localStorage.setItem('stocksentry_refresh_token', refresh_token);
+              localStorage.setItem('stocksentry_user', JSON.stringify(userData));
+              window.location.reload();
+            } catch (err) {
+              setForcePwError(err.response?.data?.detail || 'Failed to change password.');
+            } finally {
+              setForcePwSaving(false);
+            }
+          }}
+          className="bg-white rounded-2xl p-8 max-w-md w-full space-y-4 shadow-2xl border border-slate-200 text-xs"
+        >
+          <h2 className="text-xl font-black text-[#1c023d]">Password Change Required</h2>
+          <p className="text-slate-500">
+            For security, you must set a new password (min 10 characters, not containing your name or email) before accessing StockSentry.
+          </p>
+          {forcePwError && <div className="p-3 rounded-lg bg-rose-50 border border-rose-200 text-rose-700 font-bold">{forcePwError}</div>}
+          <input
+            type="password"
+            required
+            value={forcePwCurrent}
+            onChange={(e) => setForcePwCurrent(e.target.value)}
+            placeholder="Current temporary password"
+            className="w-full px-3.5 py-2.5 rounded-lg bg-slate-50 border border-slate-300 font-semibold"
+          />
+          <input
+            type="password"
+            required
+            minLength={10}
+            value={forcePwNew}
+            onChange={(e) => setForcePwNew(e.target.value)}
+            placeholder="New password (min 10 chars)"
+            className="w-full px-3.5 py-2.5 rounded-lg bg-slate-50 border border-slate-300 font-semibold"
+          />
+          <button type="submit" disabled={forcePwSaving} className="w-full py-3 rounded-xl bg-[#e20d65] text-white font-extrabold">
+            {forcePwSaving ? 'Updating...' : 'Update Password & Continue'}
+          </button>
+          <button type="button" onClick={logout} className="w-full py-2 text-slate-500 font-bold">
+            Sign Out
+          </button>
+        </form>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-[#f8fafc] text-slate-900 font-sans flex flex-col">
@@ -376,6 +501,8 @@ const MainApp = () => {
           activeTab={activeTab}
           setActiveTab={setActiveTab}
           pendingRequestsCount={pendingRequestsCount}
+          pendingFieldReqsCount={pendingFieldReqsCount}
+          myTechDeliveriesCount={myTechDeliveriesCount}
           openAlertsCount={openAlertsCount}
           userRole={user.role}
           locationName={locations.find(l => l.location_id === currentLocationId)?.city || 'City'}
@@ -496,6 +623,31 @@ const MainApp = () => {
                 className={`px-3.5 py-1.5 border transition ${activeTab === 'audit-logs' ? 'bg-[#1c023d] text-white border-[#1c023d]' : 'bg-white text-slate-700 hover:bg-slate-100 border-slate-300'}`}
               >
                 System Audit Logs
+              </button>
+            </div>
+          )}
+
+          {activeTab === 'dashboard' && user?.role !== 'FIELD_WORKER' && (
+            <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 mb-5">
+              <button onClick={() => setActiveTab(isSuperAdmin || user?.role === 'REGIONAL_ADMIN' ? 'requests' : 'my-requests')} className="bg-white rounded-xl p-3.5 border border-slate-200 hover:border-[#e20d65] text-left transition shadow-xs">
+                <div className="text-[10px] font-bold text-slate-400 uppercase">City Stock Requests</div>
+                <div className="text-xl font-black text-[#1c023d] mt-0.5">{pendingRequestsCount} <span className="text-[11px] font-bold text-slate-400">pending</span></div>
+              </button>
+              <button onClick={() => setActiveTab('field-requisitions')} className="bg-white rounded-xl p-3.5 border border-slate-200 hover:border-[#e20d65] text-left transition shadow-xs">
+                <div className="text-[10px] font-bold text-slate-400 uppercase">Field Tech Requests</div>
+                <div className="text-xl font-black text-[#e20d65] mt-0.5">{pendingFieldReqsCount} <span className="text-[11px] font-bold text-slate-400">pending</span></div>
+              </button>
+              <button onClick={() => setActiveTab('tickets')} className="bg-white rounded-xl p-3.5 border border-slate-200 hover:border-[#e20d65] text-left transition shadow-xs">
+                <div className="text-[10px] font-bold text-slate-400 uppercase">Support Tickets</div>
+                <div className="text-xl font-black text-indigo-600 mt-0.5">{openTicketsCount} <span className="text-[11px] font-bold text-slate-400">open</span></div>
+              </button>
+              <button onClick={() => setActiveTab('loss-reports')} className="bg-white rounded-xl p-3.5 border border-slate-200 hover:border-[#e20d65] text-left transition shadow-xs">
+                <div className="text-[10px] font-bold text-slate-400 uppercase">Loss / Stolen Reports</div>
+                <div className="text-xl font-black text-amber-600 mt-0.5">{pendingLossCount} <span className="text-[11px] font-bold text-slate-400">pending</span></div>
+              </button>
+              <button onClick={() => setActiveTab(isSuperAdmin || user?.role === 'REGIONAL_ADMIN' ? 'alerts' : 'dashboard')} className="bg-white rounded-xl p-3.5 border border-slate-200 hover:border-[#e20d65] text-left transition shadow-xs">
+                <div className="text-[10px] font-bold text-slate-400 uppercase">Low Stock Alerts</div>
+                <div className="text-xl font-black text-rose-600 mt-0.5">{openAlertsCount} <span className="text-[11px] font-bold text-slate-400">open</span></div>
               </button>
             </div>
           )}
@@ -628,6 +780,36 @@ const MainApp = () => {
             />
           )}
 
+          {activeTab === 'field-requisitions' && (
+            <FieldRequisitionsPage />
+          )}
+
+          {activeTab === 'field-assign' && (
+            ['SUPER_ADMIN', 'CENTRAL_ADMIN', 'REGIONAL_ADMIN', 'MANAGER', 'LOCATION_MANAGER'].includes(user.role)
+              ? <FieldBulkAssignPage />
+              : <div className="bg-white rounded-xl p-8 border border-slate-200 text-center text-xs font-bold text-rose-700">Access Restricted: City Manager or Admin role required.</div>
+          )}
+
+          {activeTab === 'tickets' && (
+            <TicketsPage />
+          )}
+
+          {activeTab === 'loss-reports' && (
+            <LossReportsPage />
+          )}
+
+          {activeTab === 'audits' && (
+            ['SUPER_ADMIN', 'CENTRAL_ADMIN', 'REGIONAL_ADMIN', 'MANAGER', 'LOCATION_MANAGER'].includes(user.role)
+              ? <StockAuditsPage />
+              : <div className="bg-white rounded-xl p-8 border border-slate-200 text-center text-xs font-bold text-rose-700">Access Restricted: City Manager or Admin role required.</div>
+          )}
+
+          {activeTab === 'bulk-serials' && (
+            isSuperAdmin
+              ? <BulkSerialIntakePage />
+              : <div className="bg-white rounded-xl p-8 border border-slate-200 text-center text-xs font-bold text-rose-700">Access Restricted: Super Admin role required.</div>
+          )}
+
           {['my-assets', 'my-complaints', 'field-desk', 'wifi-setup', 'field-guide'].includes(activeTab) && (
             <FieldWorkerDeskPage
               defaultSubTab={
@@ -652,6 +834,8 @@ const MainApp = () => {
               onDispatch={handleDispatchRequest}
               onConfirmDelivery={handleConfirmDelivery}
               isCentralAdmin={isCentralAdmin}
+              pendingFieldReqsCount={pendingFieldReqsCount}
+              onNavigateToFieldReqs={() => setActiveTab('field-requisitions')}
             />
           )}
 
@@ -711,21 +895,7 @@ const MainApp = () => {
 
           {(activeTab === 'request-form' || activeTab === 'store') && (
             user?.role === 'FIELD_WORKER' ? (
-              <div className="bg-white rounded-2xl p-10 border border-slate-200 text-center max-w-xl mx-auto space-y-4">
-                <div className="w-12 h-12 rounded-xl bg-purple-50 text-[#6700ce] flex items-center justify-center mx-auto">
-                  <ShieldCheck className="w-6 h-6" />
-                </div>
-                <h2 className="text-xl font-black text-[#1c023d]">Procurement & Ordering Restricted</h2>
-                <p className="text-xs text-slate-500 leading-relaxed">
-                  Field Technicians handle on-site subscriber installation, fiber splicing, and Wi-Fi activation. Commercial stock procurement and warehouse refill orders are managed exclusively by City Hub Managers and Central Logistics.
-                </p>
-                <button
-                  onClick={() => setActiveTab('field-desk')}
-                  className="px-5 py-2.5 rounded-xl bg-[#1c023d] text-white font-extrabold text-xs transition"
-                >
-                  Return to Field Operations Desk
-                </button>
-              </div>
+              <FieldRequisitionsPage />
             ) : (
               <StockRefillStoreSection
                 items={items}
@@ -780,6 +950,12 @@ const MainApp = () => {
             <AlertTelemetrySection
               alerts={alerts}
               onUpdateStatus={handleUpdateAlertStatus}
+            />
+          )}
+
+          {activeTab === 'predictive-ai' && (
+            <PredictiveForecastPage
+              onOrderCreated={() => setRefreshTrigger(p => p + 1)}
             />
           )}
 

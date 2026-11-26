@@ -44,14 +44,30 @@ api.interceptors.request.use(
   (error) => Promise.reject(error)
 );
 
-// Response interceptor for auth errors and network handling
+// Response interceptor for auth errors, refresh token rotation, and network handling
 api.interceptors.response.use(
   (response) => response,
-  (error) => {
-    if (error.response && error.response.status === 401) {
-      // Clear invalid session tokens cleanly without invalid URL navigation
+  async (error) => {
+    const originalRequest = error.config;
+    if (error.response && error.response.status === 401 && !originalRequest?._retry) {
+      const refreshToken = localStorage.getItem('stocksentry_refresh_token');
+      if (refreshToken && !originalRequest.url?.includes('/auth/login') && !originalRequest.url?.includes('/auth/refresh')) {
+        originalRequest._retry = true;
+        try {
+          const res = await axios.post(`${API_BASE_URL}/auth/refresh`, { refresh_token: refreshToken });
+          const { access_token, refresh_token: newRefresh, ...userData } = res.data;
+          localStorage.setItem('stocksentry_token', access_token);
+          if (newRefresh) localStorage.setItem('stocksentry_refresh_token', newRefresh);
+          localStorage.setItem('stocksentry_user', JSON.stringify(userData));
+          originalRequest.headers.Authorization = `Bearer ${access_token}`;
+          return api(originalRequest);
+        } catch {
+          // Fall through to logout cleanup
+        }
+      }
       const hadToken = localStorage.getItem('stocksentry_token');
       localStorage.removeItem('stocksentry_token');
+      localStorage.removeItem('stocksentry_refresh_token');
       localStorage.removeItem('stocksentry_user');
 
       if (hadToken && window.location.pathname !== '/') {

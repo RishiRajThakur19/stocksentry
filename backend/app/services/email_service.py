@@ -1,65 +1,57 @@
+import os
 import smtplib
-from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
 import logging
+import threading
+import time
+from email.message import EmailMessage
+from typing import Optional
+from sqlalchemy.orm import Session
+from ..models import NotificationPreference, User
 
 logger = logging.getLogger("stocksentry.email")
 
-def send_alert_email(
-    to_email: str, 
-    subject: str, 
-    body_text: str, 
-    html_body: str = None,
-    smtp_host: str = None,
-    smtp_port: int = 587,
-    smtp_user: str = None,
-    smtp_password: str = None
-) -> dict:
+
+def _should_send(db: Session, user_id: int, category: str) -> bool:
+    pref = db.query(NotificationPreference).filter(NotificationPreference.user_id == user_id).first()
+    if not pref:
+        return True
+    return bool(getattr(pref, f"email_{category}", True))
+
+
+def send_email_async(recipient: str, subject: str, body: str, max_retries: int = 3):
     """
-    Sends an email using standard SMTP (Gmail, SendGrid, Mailgun, or custom SMTP server).
-    Returns dict with success status and detailed message.
+    Dispatches email in a background daemon thread with exponential backoff retries.
+    Never blocks API requests.
     """
-    msg = MIMEMultipart("alternative")
-    msg["Subject"] = subject
-    msg["From"] = smtp_user or "alerts@tataplayfiber.com"
-    msg["To"] = to_email
+    smtp_host = os.getenv("SMTP_HOST")
+    smtp_user = os.getenv("SMTP_USER")
+    smtp_pass = os.getenv("SMTP_PASSWORD")
+    if not smtp_host or not smtp_user or not smtp_pass or not recipient:
+        return
 
-    text_part = MIMEText(body_text, "plain")
-    msg.attach(text_part)
+    def _worker():
+        for attempt in range(1, max_retries + 1):
+            try:
+                msg = EmailMessage()
+                msg["Subject"] = subject
+                msg["From"] = os.getenv("SMTP_FROM", smtp_user)
+                msg["To"] = recipient
+                msg.set_content(body)
+                with smtplib.SMTP(smtp_host, int(os.getenv("SMTP_PORT", "587")), timeout=10) as server:
+                    server.starttls()
+                    server.login(smtp_user, smtp_pass)
+                    server.send_message(msg)
+                return
+            except Exception as e:
+                logger.warning(f"Email attempt {attempt}/{max_retries} failed for {recipient}: {e}")
+                time.sleep(min(5, attempt * 2))
 
-    if html_body:
-        html_part = MIMEText(html_body, "html")
-        msg.attach(html_part)
+    threading.Thread(target=_worker, daemon=True).start()
 
-    # If live SMTP credentials are provided, attempt real network delivery
-    if smtp_host and smtp_user and smtp_password:
-        try:
-            logger.info(f"📧 [SMTP NETWORK DISPATCH] Connecting to {smtp_host}:{smtp_port} for {to_email}...")
-            server = smtplib.SMTP(smtp_host, smtp_port, timeout=10)
-            server.ehlo()
-            server.starttls()
-            server.login(smtp_user, smtp_password)
-            server.sendmail(smtp_user, [to_email], msg.as_string())
-            server.quit()
-            
-            logger.info(f"✅ Real email delivered to {to_email} via {smtp_host}!")
-            return {
-                "success": True,
-                "mode": "LIVE_SMTP_NETWORK_SENT",
-                "message": f"Real email delivered to {to_email} via {smtp_host}!"
-            }
-        except Exception as e:
-            logger.error(f"❌ SMTP delivery failed: {e}")
-            return {
-                "success": False,
-                "mode": "SMTP_ERROR",
-                "message": f"SMTP delivery failed: {str(e)}"
-            }
-    else:
-        # System simulation mode (no credentials provided yet)
-        logger.info(f"📧 [SYSTEM DISPATCH] Alert logged for {to_email}. (To send real emails to your personal inbox, provide SMTP/Gmail credentials below)")
-        return {
-            "success": True,
-            "mode": "SYSTEM_DISPATCH_LOGGED",
-            "message": f"Dispatched and logged for {to_email}. Configure SMTP credentials below for live inbox delivery."
-        }
+
+def notify_user_email(db: Session, user: Optional[User], category: str, subject: str, body: str):
+    if not user or not user.is_active or not user.email:
+        return
+    if not _should_send(db, user.user_id, category):
+        return
+    send_email_async(user.email, subject, body)

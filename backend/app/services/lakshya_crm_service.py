@@ -160,7 +160,7 @@ def sync_lakshya_workforce_to_db(
     """
     Reconciles My Lakshya CRM records with StockSentry internal Users table.
     """
-    records, mode, message = fetch_lakshya_workforce_data(crm_url, api_key)
+    records, mode, message = fetch_lakshya_workforce_data(crm_url, api_key) 
     
     locations = db.query(Location).all()
     loc_by_name = {loc.name.lower().strip(): loc for loc in locations}

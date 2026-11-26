@@ -8,10 +8,12 @@ import {
 } from 'lucide-react';
 import api from '../api/client';
 import { ReportFaultModal } from '../components/ReportFaultModal';
+import { cacheMyAssets, getCachedMyAssets } from '../utils/offlineQueue';
 
 export const FieldWorkerDeskPage = ({ onNavigateToLifecycle, defaultSubTab = 'jobs' }) => {
   const [activeSubTab, setActiveSubTab] = useState(defaultSubTab); // 'jobs' | 'assets' | 'wifi-setup' | 'complaints' | 'guide'
   const [assignedAssets, setAssignedAssets] = useState([]);
+  const [assignedConsumables, setAssignedConsumables] = useState([]);
   const [complaints, setComplaints] = useState([]);
   const [loading, setLoading] = useState(true);
   const [isReportModalOpen, setIsReportModalOpen] = useState(false);
@@ -90,12 +92,15 @@ export const FieldWorkerDeskPage = ({ onNavigateToLifecycle, defaultSubTab = 'jo
   const fetchData = async () => {
     setLoading(true);
     try {
-      const [assetsRes, complaintsRes] = await Promise.all([
+      const [assetsRes, complaintsRes, consumablesRes] = await Promise.all([
         api.get('/lifecycle/my-assets'),
-        api.get('/complaints/my')
+        api.get('/complaints/my'),
+        api.get('/field-requisitions/my-consumables').catch(() => ({ data: [] }))
       ]);
       setAssignedAssets(assetsRes.data);
+      cacheMyAssets(assetsRes.data);
       setComplaints(complaintsRes.data);
+      setAssignedConsumables(consumablesRes.data || []);
 
       // Pre-select first available ONT modem in toolbag if not set
       if (assetsRes.data && assetsRes.data.length > 0) {
@@ -116,6 +121,8 @@ export const FieldWorkerDeskPage = ({ onNavigateToLifecycle, defaultSubTab = 'jo
       }
     } catch (err) {
       console.error('Failed to fetch field technician data:', err);
+      const cached = getCachedMyAssets();
+      if (cached.length > 0) setAssignedAssets(cached);
     } finally {
       setLoading(false);
     }
@@ -125,6 +132,28 @@ export const FieldWorkerDeskPage = ({ onNavigateToLifecycle, defaultSubTab = 'jo
     setSelectedAssetForFault(asset);
     setIsReportModalOpen(true);
   };
+
+  const handleConfirmAssetDelivery = async (assetId) => {
+    try {
+      await api.post(`/field-requisitions/confirm-asset/${assetId}`);
+      await fetchData();
+    } catch (err) {
+      alert(err.response?.data?.detail || 'Failed to confirm delivery.');
+    }
+  };
+
+  const handleConfirmConsumableDelivery = async (assignmentId) => {
+    try {
+      await api.post(`/field-requisitions/confirm-consumable/${assignmentId}`);
+      await fetchData();
+    } catch (err) {
+      alert(err.response?.data?.detail || 'Failed to confirm delivery.');
+    }
+  };
+
+  const pendingSerialDeliveries = assignedAssets.filter((a) => a.tech_delivery_status === 'DISPATCHED');
+  const pendingConsumableDeliveries = assignedConsumables.filter((c) => c.delivery_status === 'DISPATCHED');
+  const totalPendingDeliveries = pendingSerialDeliveries.length + pendingConsumableDeliveries.length;
 
   // Launch Wi-Fi Setup workflow from a Work Order
   const handleLaunchWifiSetupFromOrder = (order) => {
@@ -696,6 +725,63 @@ export const FieldWorkerDeskPage = ({ onNavigateToLifecycle, defaultSubTab = 'jo
           {/* ================= SUBTAB 3: MY ASSIGNED TOOLBAG & HARDWARE ================= */}
           {activeSubTab === 'assets' && (
             <div className="space-y-4 animate-fade-in">
+              {/* Persistent Incoming Dispatches & Delivery Tracker */}
+              {totalPendingDeliveries > 0 && (
+                <div className="bg-gradient-to-r from-[#1c023d] to-[#3a0778] text-white rounded-2xl p-5 shadow-md space-y-3">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <h3 className="text-sm font-black flex items-center gap-2">
+                        <Package className="w-4 h-4 text-[#e20d65]" />
+                        <span>Incoming Gear & Hardware Dispatches ({totalPendingDeliveries})</span>
+                      </h3>
+                      <p className="text-[11px] text-purple-200 mt-0.5">
+                        Your City Manager / Regional Admin assigned new items to you. Track and confirm once physically received.
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    {pendingSerialDeliveries.map((a) => (
+                      <div key={`p-ser-${a.asset_id}`} className="bg-white text-slate-900 rounded-xl p-3.5 flex items-center justify-between gap-3">
+                        <div className="flex items-center gap-3 min-w-0">
+                          <img src={a.image_url || '/assets/modem_nokia.png'} alt={a.item_name} className="w-12 h-12 object-contain bg-slate-50 rounded-lg p-1 border border-slate-200 shrink-0" />
+                          <div className="min-w-0">
+                            <div className="text-xs font-black text-[#1c023d] truncate">{a.item_name}</div>
+                            <div className="text-[10px] font-mono text-purple-700 font-bold">SN: {a.serial_number}</div>
+                            <div className="text-[10px] font-bold text-amber-600 mt-0.5">Assigned → In Transit → Pending Confirm</div>
+                          </div>
+                        </div>
+                        <button
+                          onClick={() => handleConfirmAssetDelivery(a.asset_id)}
+                          className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-extrabold shrink-0"
+                        >
+                          Confirm Received
+                        </button>
+                      </div>
+                    ))}
+
+                    {pendingConsumableDeliveries.map((c) => (
+                      <div key={`p-con-${c.assignment_id}`} className="bg-white text-slate-900 rounded-xl p-3.5 flex items-center justify-between gap-3">
+                        <div className="flex items-center gap-3 min-w-0">
+                          <img src={c.image_url || '/assets/modem_nokia.png'} alt={c.item_name} className="w-12 h-12 object-contain bg-slate-50 rounded-lg p-1 border border-slate-200 shrink-0" />
+                          <div className="min-w-0">
+                            <div className="text-xs font-black text-[#1c023d] truncate">{c.quantity} × {c.item_name} ({c.variant_name})</div>
+                            <div className="text-[10px] text-slate-500">By {c.assigner_name}</div>
+                            <div className="text-[10px] font-bold text-amber-600 mt-0.5">Assigned → In Transit → Pending Confirm</div>
+                          </div>
+                        </div>
+                        <button
+                          onClick={() => handleConfirmConsumableDelivery(c.assignment_id)}
+                          className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-extrabold shrink-0"
+                        >
+                          Confirm Received
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
               <div className="flex items-center justify-between">
                 <div>
                   <h2 className="text-sm font-black text-[#1c023d] flex items-center gap-2">
@@ -749,9 +835,32 @@ export const FieldWorkerDeskPage = ({ onNavigateToLifecycle, defaultSubTab = 'jo
                             </div>
                           </div>
 
-                          <div className="pt-2 border-t border-slate-100 flex items-center justify-between text-xs text-slate-500">
-                            <span>Unit Value: <strong className="text-slate-800 font-mono">₹{asset.unit_cost?.toLocaleString('en-IN')}</strong></span>
-                            <span>Assigned: <strong className="text-slate-800">{new Date(asset.created_at).toLocaleDateString('en-IN')}</strong></span>
+                          <div className="pt-2 border-t border-slate-100 space-y-1.5 text-[11px] text-slate-600">
+                            {asset.description && (
+                              <p className="text-[11px] text-slate-500 line-clamp-2">{asset.description}</p>
+                            )}
+                            <div className="flex items-center justify-between">
+                              <span>Assigned By: <strong className="text-[#1c023d]">{asset.assigned_by_name || 'City Hub Manager'}</strong></span>
+                              <span className={`px-1.5 py-0.5 rounded text-[10px] font-extrabold border ${
+                                asset.tech_delivery_status === 'DISPATCHED'
+                                  ? 'bg-amber-50 text-amber-700 border-amber-200'
+                                  : 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                              }`}>
+                                {asset.tech_delivery_status === 'DISPATCHED' ? 'Pending Confirm' : 'Confirmed'}
+                              </span>
+                            </div>
+                            <div className="flex items-center justify-between text-slate-500">
+                              <span>Hub: <strong className="text-slate-800">{asset.current_location_name || 'Field'}</strong></span>
+                              <span>Value: <strong className="text-slate-800 font-mono">₹{asset.unit_cost?.toLocaleString('en-IN')}</strong></span>
+                            </div>
+                            <div className="flex items-center justify-between text-slate-500">
+                              <span>Assigned On: <strong className="text-slate-800">{new Date(asset.assigned_at || asset.created_at).toLocaleDateString('en-IN')}</strong></span>
+                            </div>
+                            {asset.assignment_notes && (
+                              <div className="text-[10px] bg-slate-50 border border-slate-200 rounded px-2 py-1 text-slate-600">
+                                {asset.assignment_notes}
+                              </div>
+                            )}
                           </div>
                         </div>
 
@@ -790,6 +899,17 @@ export const FieldWorkerDeskPage = ({ onNavigateToLifecycle, defaultSubTab = 'jo
                           >
                             <ArrowRight className="w-3.5 h-3.5" />
                           </button>
+
+                          <button
+                            onClick={async () => {
+                              await api.post(`/field-requisitions/return-asset/${asset.asset_id}`);
+                              await fetchData();
+                            }}
+                            className="px-2.5 py-1.5 rounded-xl bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200 font-bold text-xs transition"
+                            title="Return unused hardware to City Hub"
+                          >
+                            Return
+                          </button>
                         </div>
 
                       </div>
@@ -797,6 +917,99 @@ export const FieldWorkerDeskPage = ({ onNavigateToLifecycle, defaultSubTab = 'jo
                   })}
                 </div>
               )}
+
+              {/* Assigned Uniforms, T-Shirts & Consumable Gear */}
+              <div className="bg-white rounded-2xl p-5 border border-slate-200 shadow-xs space-y-3 mt-4">
+                <h3 className="text-xs font-black text-[#1c023d] uppercase tracking-wider flex items-center gap-2">
+                  <Package className="w-4 h-4 text-[#e20d65]" />
+                  <span>Assigned Uniforms, PPE & Consumable Gear ({assignedConsumables.length})</span>
+                </h3>
+                {assignedConsumables.length === 0 ? (
+                  <p className="text-xs text-slate-400">No uniforms or consumable gear assigned yet. Use "Request Gear & Supplies" in the sidebar to order.</p>
+                ) : (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                    {assignedConsumables.map((c) => (
+                      <div key={c.assignment_id} className="p-4 rounded-xl bg-slate-50 border border-slate-200 flex flex-col justify-between gap-3">
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="flex items-center gap-3 min-w-0">
+                            <img
+                              src={c.image_url || '/assets/modem_nokia.png'}
+                              alt={c.item_name}
+                              className="w-12 h-12 object-contain bg-white rounded-lg p-1 border border-slate-200 shrink-0"
+                            />
+                            <div className="min-w-0">
+                              <span className="text-[10px] font-extrabold uppercase px-1.5 py-0.5 rounded bg-purple-50 text-[#6700ce] border border-purple-200">
+                                {c.category}
+                              </span>
+                              <div className="text-xs font-black text-[#1c023d] truncate mt-0.5">{c.item_name}</div>
+                              <div className="text-[11px] text-slate-500 truncate">{c.variant_name}</div>
+                            </div>
+                          </div>
+                          <span className="px-2.5 py-1 rounded-lg bg-purple-100 text-[#6700ce] font-mono font-black text-xs shrink-0">
+                            ×{c.quantity}
+                          </span>
+                        </div>
+
+                        <div className="pt-2 border-t border-slate-200/70 space-y-1 text-[11px] text-slate-600">
+                          <div className="flex justify-between">
+                            <span>Assigned By: <strong className="text-[#1c023d]">{c.assigner_name}</strong></span>
+                            <span>Hub: <strong className="text-slate-800">{c.location_name}</strong></span>
+                          </div>
+                          <div className="flex justify-between items-center">
+                            <span>Assigned: <strong className="text-slate-800">{new Date(c.assigned_at).toLocaleDateString('en-IN')}</strong></span>
+                            <span className={`text-[10px] font-extrabold px-2 py-0.5 rounded border ${
+                              c.delivery_status === 'DELIVERED'
+                                ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                                : 'bg-amber-50 text-amber-700 border-amber-200'
+                            }`}>
+                              {c.delivery_status === 'DELIVERED' ? 'Delivered' : 'In Transit'}
+                            </span>
+                          </div>
+                          {c.delivered_at && (
+                            <div className="text-[10px] text-emerald-700 font-semibold">
+                              Confirmed Received: {new Date(c.delivered_at).toLocaleString('en-IN')}
+                            </div>
+                          )}
+                          {c.notes && (
+                            <div className="text-[10px] bg-white border border-slate-200 rounded px-2 py-1 text-slate-500">
+                              {c.notes}
+                            </div>
+                          )}
+                        </div>
+
+                        <div className="flex flex-wrap gap-2">
+                          {c.delivery_status === 'DISPATCHED' && (
+                            <button
+                              onClick={() => handleConfirmConsumableDelivery(c.assignment_id)}
+                              className="flex-1 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-extrabold"
+                            >
+                              Confirm Received
+                            </button>
+                          )}
+                          <button
+                            onClick={async () => {
+                              await api.post(`/field-requisitions/consume-consumable/${c.assignment_id}?quantity=1`);
+                              await fetchData();
+                            }}
+                            className="px-2.5 py-1.5 rounded-lg bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 text-[11px] font-bold"
+                          >
+                            Mark Used (-1)
+                          </button>
+                          <button
+                            onClick={async () => {
+                              await api.post(`/field-requisitions/return-consumable/${c.assignment_id}`);
+                              await fetchData();
+                            }}
+                            className="px-2.5 py-1.5 rounded-lg bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200 text-[11px] font-bold"
+                          >
+                            Return to Hub
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
             </div>
           )}
 

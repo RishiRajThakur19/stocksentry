@@ -1,5 +1,6 @@
 from typing import List, Optional
-from fastapi import APIRouter, Depends, HTTPException, status
+import json
+from fastapi import APIRouter, Depends, Header, HTTPException, status
 from sqlalchemy.orm import Session
 from datetime import datetime
 import random
@@ -7,7 +8,8 @@ import random
 from ..database import get_db
 from ..models import (
     RequestModel, RequestStatusEnum, InventoryStock, ItemVariant, AssetUnit, 
-    AssetStatusEnum, StockTransaction, TxnTypeEnum, User, RoleEnum, Location, Region
+    AssetStatusEnum, StockTransaction, TxnTypeEnum, User, RoleEnum, Location, Region,
+    IdempotencyRecord
 )
 from ..schemas import RequestCreatePayload, RequestDispatchPayload, RequestOut
 from ..auth import get_current_user, require_admin, require_super_admin, require_regional_or_super_admin, verify_user_scope_for_location
@@ -106,8 +108,7 @@ async def create_request(
         location_id=target_location_id,
         quantity_requested=payload.quantity_requested,
         status=RequestStatusEnum.PENDING.value,
-        requested_by=current_user.user_id,
-        notes=payload.notes
+        requested_by=current_user.user_id
     )
     db.add(req)
     db.commit()
@@ -215,6 +216,37 @@ async def approve_request(
     if req.status != RequestStatusEnum.PENDING.value:
         raise HTTPException(status_code=400, detail=f"Request is already in {req.status} status")
 
+    variant = db.query(ItemVariant).filter(ItemVariant.variant_id == req.variant_id).first()
+    item = variant.item if variant else None
+    is_serialized = item.is_serialized if item else False
+
+    # Reserve stock atomically with row locking
+    if is_serialized:
+        free_units = db.query(AssetUnit).filter(
+            AssetUnit.variant_id == req.variant_id,
+            AssetUnit.status == AssetStatusEnum.IN_WAREHOUSE.value,
+            AssetUnit.is_reserved.is_(False)
+        ).with_for_update().limit(req.quantity_requested).all()
+        if len(free_units) < req.quantity_requested:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Insufficient unreserved serialized units. Available: {len(free_units)}, Requested: {req.quantity_requested}"
+            )
+        for u in free_units:
+            u.is_reserved = True
+            u.reserved_for_request_id = req.request_id
+    else:
+        stock = db.query(InventoryStock).filter(
+            InventoryStock.variant_id == req.variant_id
+        ).with_for_update().first()
+        available = (stock.current_quantity - (stock.reserved_quantity or 0)) if stock else 0
+        if not stock or available < req.quantity_requested:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Insufficient unreserved central stock. Available: {available}, Requested: {req.quantity_requested}"
+            )
+        stock.reserved_quantity = (stock.reserved_quantity or 0) + req.quantity_requested
+
     req.status = RequestStatusEnum.APPROVED.value
     req.approved_by = current_user.user_id
     req.approved_at = datetime.utcnow()
@@ -222,17 +254,17 @@ async def approve_request(
     db.commit()
     db.refresh(req)
 
-    variant = db.query(ItemVariant).filter(ItemVariant.variant_id == req.variant_id).first()
-    item = variant.item if variant else None
-
     log_audit(db, "APPROVE_REQUEST", f"{current_user.name} ({current_user.role}) approved Request #{req.request_id} ({req.quantity_requested}x {item.name if item else ''})", current_user.user_id, current_user.name, current_user.role)
 
+    loc_obj = req.location
     await ws_manager.broadcast({
         "type": "ORDER_APPROVED",
+        "region_id": loc_obj.region_id if loc_obj else None,
+        "location_id": req.location_id,
         "payload": {
             "order_id": req.request_id,
             "request_id": req.request_id,
-            "location_name": req.location.name if req.location else "",
+            "location_name": loc_obj.name if loc_obj else "",
             "item_name": item.name if item else "",
             "variant_name": variant.variant_name if variant else "",
             "quantity_requested": req.quantity_requested,
@@ -266,6 +298,23 @@ async def reject_request(
                 detail="Access forbidden: You can only reject requests for your assigned region."
             )
 
+    # Release any stock reservation if request was previously APPROVED
+    if req.status == RequestStatusEnum.APPROVED.value:
+        variant = db.query(ItemVariant).filter(ItemVariant.variant_id == req.variant_id).first()
+        if variant and variant.item and variant.item.is_serialized:
+            reserved_units = db.query(AssetUnit).filter(
+                AssetUnit.reserved_for_request_id == req.request_id
+            ).with_for_update().all()
+            for u in reserved_units:
+                u.is_reserved = False
+                u.reserved_for_request_id = None
+        else:
+            stock = db.query(InventoryStock).filter(
+                InventoryStock.variant_id == req.variant_id
+            ).with_for_update().first()
+            if stock:
+                stock.reserved_quantity = max(0, (stock.reserved_quantity or 0) - req.quantity_requested)
+
     req.status = RequestStatusEnum.REJECTED.value
     db.commit()
     db.refresh(req)
@@ -277,14 +326,24 @@ async def reject_request(
 async def dispatch_request(
     request_id: int,
     payload: RequestDispatchPayload,
+    idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key"),
     current_user: User = Depends(require_super_admin),
     db: Session = Depends(get_db)
 ):
     """
     Super Admin dispatches approved city request from Central Warehouse.
-    If item is serialized, transitions AssetUnit rows from IN_WAREHOUSE to DISPATCHED.
+    Consumes reserved stock/serials inside a locked transaction and supports Idempotency-Key.
     """
-    req = db.query(RequestModel).filter(RequestModel.request_id == request_id).first()
+    if idempotency_key:
+        existing_idem = db.query(IdempotencyRecord).filter(
+            IdempotencyRecord.idempotency_key == idempotency_key,
+            IdempotencyRecord.endpoint == f"/api/requests/{request_id}/dispatch",
+            IdempotencyRecord.user_id == current_user.user_id,
+        ).first()
+        if existing_idem:
+            return RequestOut(**json.loads(existing_idem.response_json))
+
+    req = db.query(RequestModel).filter(RequestModel.request_id == request_id).with_for_update().first()
     if not req:
         raise HTTPException(status_code=404, detail="Request not found")
 
@@ -296,11 +355,22 @@ async def dispatch_request(
     is_serialized = item.is_serialized if item else False
 
     if is_serialized:
-        # Fetch available units in warehouse
-        available_units = db.query(AssetUnit).filter(
+        # Prefer units reserved for this request, fallback to unreserved IN_WAREHOUSE units
+        reserved_units = db.query(AssetUnit).filter(
             AssetUnit.variant_id == req.variant_id,
-            AssetUnit.status == AssetStatusEnum.IN_WAREHOUSE.value
-        ).limit(req.quantity_requested).all()
+            AssetUnit.status == AssetStatusEnum.IN_WAREHOUSE.value,
+            AssetUnit.reserved_for_request_id == req.request_id
+        ).with_for_update().limit(req.quantity_requested).all()
+
+        available_units = list(reserved_units)
+        if len(available_units) < req.quantity_requested:
+            needed = req.quantity_requested - len(available_units)
+            extra = db.query(AssetUnit).filter(
+                AssetUnit.variant_id == req.variant_id,
+                AssetUnit.status == AssetStatusEnum.IN_WAREHOUSE.value,
+                AssetUnit.is_reserved.is_(False)
+            ).with_for_update().limit(needed).all()
+            available_units.extend(extra)
 
         if len(available_units) < req.quantity_requested:
             raise HTTPException(
@@ -311,15 +381,17 @@ async def dispatch_request(
         for unit in available_units:
             unit.status = AssetStatusEnum.DISPATCHED.value
             unit.current_location_id = req.location_id
+            unit.is_reserved = False
+            unit.reserved_for_request_id = None
     else:
-        # Check and decrement consumable stock
-        stock = db.query(InventoryStock).filter(InventoryStock.variant_id == req.variant_id).first()
+        stock = db.query(InventoryStock).filter(InventoryStock.variant_id == req.variant_id).with_for_update().first()
         if not stock or stock.current_quantity < req.quantity_requested:
             raise HTTPException(
-                status_code=400, 
+                status_code=400,
                 detail=f"Insufficient central stock. Available: {stock.current_quantity if stock else 0}, Requested: {req.quantity_requested}"
             )
         stock.current_quantity -= req.quantity_requested
+        stock.reserved_quantity = max(0, (stock.reserved_quantity or 0) - req.quantity_requested)
 
     # Log Stock Transaction
     txn = StockTransaction(
@@ -358,7 +430,17 @@ async def dispatch_request(
         }
     })
 
-    return to_request_out(req, db)
+    out = to_request_out(req, db)
+    if idempotency_key:
+        db.add(IdempotencyRecord(
+            idempotency_key=idempotency_key,
+            endpoint=f"/api/requests/{request_id}/dispatch",
+            user_id=current_user.user_id,
+            response_json=out.model_dump_json(),
+        ))
+        db.commit()
+
+    return out
 
 @router.put("/{request_id}/confirm-delivery", response_model=RequestOut)
 async def confirm_delivery(

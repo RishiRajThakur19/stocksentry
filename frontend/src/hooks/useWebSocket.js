@@ -33,7 +33,10 @@ export const useWebSocket = (onMessageCallback) => {
 
   const connect = useCallback(() => {
     try {
-      const wsUrl = getWebSocketUrl();
+      const token = localStorage.getItem('stocksentry_token');
+      if (!token) return;
+      const baseWsUrl = getWebSocketUrl();
+      const wsUrl = `${baseWsUrl}${baseWsUrl.includes('?') ? '&' : '?'}token=${encodeURIComponent(token)}`;
       const ws = new WebSocket(wsUrl);
       wsRef.current = ws;
 

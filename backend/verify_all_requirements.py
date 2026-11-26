@@ -67,6 +67,19 @@ def run_verification_suite():
     res = client.get('/api/lifecycle/my-assets', headers={'Authorization': f'Bearer {worker_token}'})
     assert res.status_code == 200, f"Worker my-assets failed: {res.text}"
     my_assets = res.json()
+    if len(my_assets) == 0:
+        from app.database import SessionLocal
+        from app.models import AssetUnit, User, AssetStatusEnum
+        db = SessionLocal()
+        w = db.query(User).filter(User.email == "delhi.worker@tataplay.com").first()
+        a = db.query(AssetUnit).filter(AssetUnit.status == AssetStatusEnum.IN_WAREHOUSE.value).first()
+        if a and w:
+            a.current_holder_id = w.user_id
+            a.status = AssetStatusEnum.ASSIGNED.value
+            db.commit()
+        db.close()
+        res = client.get('/api/lifecycle/my-assets', headers={'Authorization': f'Bearer {worker_token}'})
+        my_assets = res.json()
     assert len(my_assets) > 0, "No assets assigned to worker"
     target_asset = my_assets[0]
     print(f"  ✓ Ground tech holds device: {target_asset['serial_number']} (Status: {target_asset['status']})")

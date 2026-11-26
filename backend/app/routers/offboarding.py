@@ -86,7 +86,7 @@ def issue_noc_certificate(
     ).all()
 
     if len(assigned_assets) > 0:
-        serials = [a.serial_number for a in assigned_assets]
+        serials = [str(a.serial_number) for a in assigned_assets]
         raise HTTPException(
             status_code=400, 
             detail=f"NOC Issuance Blocked: User still holds {len(assigned_assets)} active asset(s) ({', '.join(serials)}). Must return to warehouse, reassign, or route to repair first."
@@ -99,6 +99,16 @@ def issue_noc_certificate(
     city = target_user.city_location
     reg = target_user.region or (city.region if city else None)
 
+    from ..models import LossReport
+    written_off = db.query(LossReport).filter(
+        LossReport.reported_by == target_user.user_id,
+        LossReport.status == "APPROVED"
+    ).all()
+    written_off_list = [
+        {"serial_number": lr.asset.serial_number if lr.asset else None, "loss_type": lr.loss_type, "loss_id": lr.loss_id}
+        for lr in written_off
+    ]
+
     noc = NOCRecord(
         noc_number=noc_number,
         user_id=target_user.user_id,
@@ -109,7 +119,11 @@ def issue_noc_certificate(
         issued_by_id=current_user.user_id,
         issued_by_name=current_user.name,
         cleared_at=datetime.utcnow(),
-        cleared_assets_summary=json.dumps({"status": "100% Cleared", "active_holdings": 0}),
+        cleared_assets_summary=json.dumps({
+            "status": "100% Cleared",
+            "active_holdings": 0,
+            "written_off_assets": written_off_list,
+        }),
         remarks=payload.remarks or "All Tata Play Fiber assets verified, returned and cleared."
     )
     db.add(noc)

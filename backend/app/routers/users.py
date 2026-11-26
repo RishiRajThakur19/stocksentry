@@ -1,5 +1,6 @@
 import io
 import re
+from datetime import datetime
 from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Query
 from fastapi.responses import Response
@@ -106,7 +107,9 @@ def create_user(
         password_hash=get_password_hash(req.password),
         role=req.role,
         region_id=assigned_region_id if req.role == RoleEnum.REGIONAL_ADMIN.value else None,
-        city_id=assigned_city_id if req.role in [RoleEnum.MANAGER.value, RoleEnum.FIELD_WORKER.value] else None
+        city_id=assigned_city_id if req.role in [RoleEnum.MANAGER.value, RoleEnum.FIELD_WORKER.value] else None,
+        must_change_password=True,
+        auth_provider="local",
     )
     
     # Assign multiple territories if provided
@@ -123,6 +126,26 @@ def create_user(
     log_audit(db, "CREATE_USER", f"{current_user.name} ({current_user.role}) created user '{new_user.email}' as {new_user.role} with territories {[t.name for t in new_user.territories]}", current_user.user_id, current_user.name, current_user.role)
 
     return to_user_admin_out(new_user, db)
+
+
+@router.post("/{user_id}/unlock")
+def unlock_user_account(
+    user_id: int,
+    current_user: User = Depends(require_regional_or_super_admin),
+    db: Session = Depends(get_db)
+):
+    target = db.query(User).filter(User.user_id == user_id).first()
+    if not target:
+        raise HTTPException(status_code=404, detail="User not found.")
+    if current_user.role == RoleEnum.REGIONAL_ADMIN.value:
+        loc_reg = target.region_id or (target.city_location.region_id if target.city_location else None)
+        if loc_reg != current_user.region_id:
+            raise HTTPException(status_code=403, detail="Access forbidden: User is outside your region.")
+    target.failed_login_attempts = 0
+    target.locked_until = None
+    db.commit()
+    log_audit(db, "ACCOUNT_UNLOCKED", f"{current_user.email} unlocked {target.email}", current_user.user_id, current_user.name, current_user.role)
+    return {"message": f"Account {target.email} unlocked."}
 
 @router.put("/{user_id}/territories", response_model=UserAdminOut)
 def update_user_territories(
@@ -210,19 +233,29 @@ async def bulk_upload_users(
     Parses Excel spreadsheet (.xlsx), validates each row against database records and role permissions,
     and commits valid records if commit=True.
     """
-    if not file.filename.endswith(('.xlsx', '.xls')):
-        raise HTTPException(status_code=400, detail="Invalid file format. Please upload an Excel (.xlsx) file.")
+    if not file.filename or not file.filename.lower().endswith('.xlsx'):
+        raise HTTPException(status_code=400, detail="Invalid file format. Only .xlsx files are accepted.")
 
     contents = await file.read()
+    if len(contents) > 5 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="File too large. Maximum allowed size is 5 MB.")
+
     try:
-        wb = openpyxl.load_workbook(io.BytesIO(contents), data_only=True)
+        wb = openpyxl.load_workbook(io.BytesIO(contents), read_only=True, data_only=False)
         ws = wb.active
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Failed to parse Excel file: {str(e)}")
+    except Exception:
+        raise HTTPException(status_code=400, detail="Failed to parse Excel file.")
 
     rows = list(ws.iter_rows(values_only=True))
     if not rows or len(rows) < 2:
         raise HTTPException(status_code=400, detail="Excel file is empty or missing data rows.")
+    if len(rows) - 1 > 2000:
+        raise HTTPException(status_code=400, detail="Too many rows. Maximum 2000 data rows allowed per upload.")
+
+    for row in rows[1:]:
+        for cell in row:
+            if isinstance(cell, str) and cell.strip().startswith(("=", "+", "-", "@")):
+                raise HTTPException(status_code=400, detail="Formula cells are not permitted in Excel uploads.")
 
     header = [str(cell).strip().lower() if cell else "" for cell in rows[0]]
     # Expected header mapping

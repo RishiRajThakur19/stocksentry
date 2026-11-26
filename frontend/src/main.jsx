@@ -3,6 +3,16 @@ import ReactDOM from 'react-dom/client'
 import App from './App.jsx'
 import { ErrorBoundary } from './components/ErrorBoundary.jsx'
 import './index.css'
+import { flushOfflineQueue } from './utils/offlineQueue.js'
+
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('/sw.js').catch(() => {});
+  });
+}
+window.addEventListener('online', () => {
+  flushOfflineQueue().catch(() => {});
+});
 
 ReactDOM.createRoot(document.getElementById('root')).render(
   <React.StrictMode>

@@ -50,6 +50,7 @@ class OTPVerifyRequest(BaseModel):
 
 class TokenResponse(BaseModel):
     access_token: str
+    refresh_token: Optional[str] = None
     token_type: str = "bearer"
     user_id: int
     name: str
@@ -60,6 +61,25 @@ class TokenResponse(BaseModel):
     city_id: Optional[int] = None
     location_id: Optional[int] = None
     location_name: Optional[str] = None
+    must_change_password: bool = False
+
+
+class RefreshTokenRequest(BaseModel):
+    refresh_token: str
+
+
+class ForgotPasswordRequest(BaseModel):
+    email: str
+
+
+class ResetPasswordRequest(BaseModel):
+    token: str
+    new_password: str
+
+
+class ChangePasswordRequest(BaseModel):
+    current_password: str
+    new_password: str
 
 class UserOut(BaseModel):
     user_id: int
@@ -153,6 +173,10 @@ class AssetUnitOut(BaseModel):
     description: Optional[str] = None
     unit_cost: Optional[float] = 0.0
     image_url: Optional[str] = None
+    tech_delivery_status: Optional[str] = "DELIVERED"
+    assigned_by_name: Optional[str] = None
+    assigned_at: Optional[datetime] = None
+    assignment_notes: Optional[str] = None
     health_score: Optional[int] = 95
     mtbf_hours: Optional[int] = 12000
     in_service_days: Optional[int] = 180
@@ -502,6 +526,7 @@ class RequestCreatePayload(BaseModel):
     variant_id: int
     quantity_requested: int
     location_id: Optional[int] = None # Defaults to manager's city location
+    notes: Optional[str] = None
 
 class RequestDispatchPayload(BaseModel):
     carrier_name: Optional[str] = "Tata Play Express Logistics"
@@ -724,4 +749,167 @@ class MigrationOptimizationPlanResponse(BaseModel):
 
 class ExecuteMigrationPlanRequest(BaseModel):
     route_ids: Optional[List[str]] = None
+
+# Communication & Hierarchy Messaging Schemas
+class CommunicationMessageCreate(BaseModel):
+    channel_type: str = "DIRECT" # DIRECT, BROADCAST_NATIONWIDE, BROADCAST_REGION, BROADCAST_CITY
+    recipient_id: Optional[int] = None
+    target_region_id: Optional[int] = None
+    target_city_id: Optional[int] = None
+    subject: Optional[str] = None
+    content: str
+    priority: str = "NORMAL" # NORMAL, URGENT, OPERATIONAL_DIRECTIVE
+
+class CommunicationMessageOut(BaseModel):
+    message_id: int
+    sender_id: int
+    sender_name: str
+    sender_role: str
+    recipient_id: Optional[int] = None
+    recipient_name: Optional[str] = None
+    recipient_role: Optional[str] = None
+    channel_type: str
+    target_region_id: Optional[int] = None
+    target_region_name: Optional[str] = None
+    target_city_id: Optional[int] = None
+    target_city_name: Optional[str] = None
+    subject: Optional[str] = None
+    content: str
+    priority: str
+    is_read: bool
+    read_at: Optional[datetime] = None
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+class CommunicationContactOut(BaseModel):
+    user_id: int
+    name: str
+    email: str
+    role: str
+    region_id: Optional[int] = None
+    region_name: Optional[str] = None
+    city_id: Optional[int] = None
+    city_name: Optional[str] = None
+    unread_count: int = 0
+    hierarchy_relation: str
+
+class CommunicationChannelOut(BaseModel):
+    channel_id: str
+    channel_type: str
+    name: str
+    description: str
+    target_region_id: Optional[int] = None
+    target_city_id: Optional[int] = None
+    can_post: bool
+    unread_count: int = 0
+    last_message: Optional[dict] = None
+
+
+# ================= FIELD REQUISITIONS & BULK FIELD ASSIGNMENT =================
+class FieldRequisitionCreate(BaseModel):
+    variant_id: int
+    quantity_requested: int = 1
+    urgency: str = "NORMAL" # NORMAL, URGENT, CRITICAL
+    target_approver: str = "BOTH" # BOTH, CITY_MANAGER, REGIONAL_ADMIN
+    notes: Optional[str] = None
+
+
+class FieldRequisitionAction(BaseModel):
+    review_notes: Optional[str] = None
+    asset_ids: Optional[List[int]] = None # Optional explicit serials when fulfilling serialized items
+    fulfill_quantity: Optional[int] = None # Optional partial fulfillment quantity
+    create_hub_refill_for_shortage: bool = False
+
+
+class FieldRequisitionOut(BaseModel):
+    requisition_id: int
+    requested_by: int
+    requester_name: str
+    requester_email: str
+    location_id: int
+    location_name: str
+    city: str
+    region_id: Optional[int] = None
+    region_name: Optional[str] = None
+    variant_id: int
+    item_name: str
+    variant_name: str
+    category: str
+    is_serialized: bool
+    quantity_requested: int
+    quantity_fulfilled: int = 0
+    urgency: str
+    target_approver: str
+    status: str
+    notes: Optional[str] = None
+    reviewed_by: Optional[int] = None
+    reviewer_name: Optional[str] = None
+    reviewer_role: Optional[str] = None
+    review_notes: Optional[str] = None
+    reviewed_at: Optional[datetime] = None
+    fulfilled_at: Optional[datetime] = None
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class BulkFieldAllocationItem(BaseModel):
+    user_id: int
+    quantity: int
+
+
+class BulkFieldAssignRequest(BaseModel):
+    variant_id: int
+    allocations: List[BulkFieldAllocationItem]
+    asset_ids: Optional[List[int]] = None # Optional explicit serial IDs for serialized items
+    auto_assign_serials: bool = True
+    auto_fulfill_requisitions: bool = True
+    notes: Optional[str] = None
+
+
+class BulkFieldAssignResultItem(BaseModel):
+    user_id: int
+    user_name: str
+    city_name: str
+    quantity_assigned: int
+    assigned_serials: List[str] = []
+
+
+class BulkFieldAssignResponse(BaseModel):
+    message: str
+    variant_id: int
+    item_name: str
+    variant_name: str
+    is_serialized: bool
+    total_assigned: int
+    remaining_stock: Optional[int] = None
+    fulfilled_requisitions_count: int = 0
+    results: List[BulkFieldAssignResultItem] = []
+
+
+class FieldConsumableAssignmentOut(BaseModel):
+    assignment_id: int
+    user_id: int
+    technician_name: str
+    variant_id: int
+    item_name: str
+    variant_name: str
+    category: str
+    location_id: int
+    location_name: str
+    quantity: int
+    assigned_by: int
+    assigner_name: str
+    notes: Optional[str] = None
+    image_url: Optional[str] = None
+    delivery_status: str = "DISPATCHED"
+    delivered_at: Optional[datetime] = None
+    assigned_at: datetime
+
+    class Config:
+        from_attributes = True
+
 

@@ -285,7 +285,7 @@ async def fulfill_order(
     db.refresh(order)
 
     # Threshold engine check
-    await check_and_update_threshold_alerts(db, order.variant_id, order.location_id)
+    await check_and_update_threshold_alerts(db, order.variant_id)
 
     await ws_manager.broadcast({
         "type": "ORDER_FULFILLED",

@@ -77,7 +77,7 @@ export const AssetTransferPage = ({ userRole = 'MANAGER' }) => {
 
   const executeOptimizationRoute = async (routeId) => {
     setExecutingRouteId(routeId);
-    try {
+    try { 
       const res = await api.post('/transfers/execute-optimization', {
         route_ids: [routeId]
       });

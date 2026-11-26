@@ -57,6 +57,20 @@ def report_asset_fault(
         updated_at=datetime.utcnow()
     )
     db.add(repair_req)
+    db.flush()
+
+    # Automatically create linked ASSET_FAULT Support Ticket
+    from .tickets import create_ticket_record
+    create_ticket_record(
+        db=db,
+        creator=current_user,
+        category="ASSET_FAULT",
+        priority="HIGH",
+        subject=f"Asset Fault: {asset.serial_number}",
+        description=payload.description,
+        related_asset_id=asset.asset_id,
+        related_repair_id=repair_req.repair_request_id,
+    )
 
     # Log lifecycle audit event
     event = AssetLifecycleEvent(

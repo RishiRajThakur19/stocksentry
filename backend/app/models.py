@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Float, DateTime, ForeignKey, Boolean, Text, Table
+from sqlalchemy import Column, Integer, String, Float, Numeric, DateTime, ForeignKey, Boolean, Text, Table, CheckConstraint, Index
 from sqlalchemy.orm import relationship
 from datetime import datetime
 import enum
@@ -24,6 +24,8 @@ class AssetStatusEnum(str, enum.Enum):
     ASSIGNED = "ASSIGNED"
     IN_REPAIR = "IN_REPAIR"
     DECOMMISSIONED = "DECOMMISSIONED"
+    LOST = "LOST"
+    STOLEN = "STOLEN"
 
 class TxnTypeEnum(str, enum.Enum):
     RECEIVED = "RECEIVED"
@@ -82,6 +84,11 @@ class User(Base):
     is_active = Column(Integer, default=1)
     is_leaving = Column(Boolean, default=False)
     clearance_status = Column(String(50), default="ACTIVE") # ACTIVE, PENDING_CLEARANCE, OFFBOARDED
+    must_change_password = Column(Boolean, default=False, nullable=False)
+    failed_login_attempts = Column(Integer, default=0, nullable=False)
+    locked_until = Column(DateTime, nullable=True)
+    auth_provider = Column(String(50), default="local", nullable=False)
+    token_version = Column(Integer, default=1, nullable=False)
 
     # Legacy alias support
     @property
@@ -166,10 +173,18 @@ class AssetUnit(Base):
     variant_id = Column(Integer, ForeignKey("item_variants.variant_id"), nullable=False)
     serial_number = Column(String(100), unique=True, index=True, nullable=False)
     status = Column(String(50), nullable=False, default=AssetStatusEnum.IN_WAREHOUSE.value)
-    current_holder_id = Column(Integer, ForeignKey("users.user_id"), nullable=True)
-    current_location_id = Column(Integer, ForeignKey("locations.location_id"), nullable=True)
+    current_holder_id = Column(Integer, ForeignKey("users.user_id"), nullable=True, index=True)
+    current_location_id = Column(Integer, ForeignKey("locations.location_id"), nullable=True, index=True)
     repair_location_id = Column(Integer, ForeignKey("repair_locations.repair_location_id"), nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    is_reserved = Column(Boolean, default=False, nullable=False)
+    reserved_for_request_id = Column(Integer, nullable=True)
+    receipt_batch_id = Column(Integer, ForeignKey("receipt_batches.batch_id"), nullable=True)
+    tech_delivery_status = Column(String(30), default="DELIVERED", nullable=False) # DISPATCHED, DELIVERED
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
+
+    __table_args__ = (
+        Index("ix_asset_units_status_loc", "status", "current_location_id"),
+    )
 
     variant = relationship("ItemVariant", back_populates="asset_units")
     holder = relationship("User", back_populates="assigned_assets", foreign_keys=[current_holder_id])
@@ -328,7 +343,13 @@ class InventoryStock(Base):
     stock_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
     variant_id = Column(Integer, ForeignKey("item_variants.variant_id"), unique=True, nullable=False)
     current_quantity = Column(Integer, nullable=False, default=0)
+    reserved_quantity = Column(Integer, nullable=False, default=0)
     last_updated = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    __table_args__ = (
+        CheckConstraint("current_quantity >= 0", name="ck_inventory_stock_qty_non_negative"),
+        CheckConstraint("reserved_quantity >= 0", name="ck_inventory_stock_reserved_non_negative"),
+    )
 
     variant = relationship("ItemVariant", back_populates="stock_record")
 
@@ -422,3 +443,303 @@ class ManagerHandoverRecord(Base):
     transferred_summary_json = Column(Text, nullable=True)
     notes = Column(Text, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
+
+class CommunicationMessage(Base):
+    """
+    Hierarchical communication messages, team dispatches, and operational broadcast directives.
+    Channel Types:
+      - 'DIRECT': 1-on-1 direct message between authorized hierarchical contacts
+      - 'BROADCAST_NATIONWIDE': Super Admin directive broadcast to all regions and hubs
+      - 'BROADCAST_REGION': Regional Admin directive broadcast to city hubs within the region
+      - 'BROADCAST_CITY': City Hub Manager dispatch memo broadcast to field technicians in that hub
+    """
+    __tablename__ = "communication_messages"
+
+    message_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    sender_id = Column(Integer, ForeignKey("users.user_id"), nullable=False)
+    recipient_id = Column(Integer, ForeignKey("users.user_id"), nullable=True) # null for channel/broadcasts
+    channel_type = Column(String(50), nullable=False, default="DIRECT") # DIRECT, BROADCAST_NATIONWIDE, BROADCAST_REGION, BROADCAST_CITY
+    target_region_id = Column(Integer, ForeignKey("regions.region_id"), nullable=True)
+    target_city_id = Column(Integer, ForeignKey("locations.location_id"), nullable=True)
+    subject = Column(String(200), nullable=True)
+    content = Column(Text, nullable=False)
+    priority = Column(String(30), nullable=False, default="NORMAL") # NORMAL, URGENT, OPERATIONAL_DIRECTIVE
+    is_read = Column(Boolean, default=False)
+    read_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    sender = relationship("User", foreign_keys=[sender_id])
+    recipient = relationship("User", foreign_keys=[recipient_id])
+    target_region = relationship("Region", foreign_keys=[target_region_id])
+    target_city = relationship("Location", foreign_keys=[target_city_id])
+
+
+class FieldRequisition(Base):
+    """
+    Field Technician gear/equipment/uniform requisition routed to both City Manager and Regional Admin.
+    """
+    __tablename__ = "field_requisitions"
+
+    requisition_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    requested_by = Column(Integer, ForeignKey("users.user_id"), nullable=False)
+    location_id = Column(Integer, ForeignKey("locations.location_id"), nullable=False)
+    region_id = Column(Integer, ForeignKey("regions.region_id"), nullable=True)
+    variant_id = Column(Integer, ForeignKey("item_variants.variant_id"), nullable=False)
+    quantity_requested = Column(Integer, nullable=False, default=1)
+    quantity_fulfilled = Column(Integer, nullable=False, default=0)
+    urgency = Column(String(30), nullable=False, default="NORMAL") # NORMAL, URGENT, CRITICAL
+    target_approver = Column(String(30), nullable=False, default="BOTH") # BOTH, CITY_MANAGER, REGIONAL_ADMIN
+    status = Column(String(30), nullable=False, default="PENDING") # PENDING, APPROVED, FULFILLED, REJECTED
+    notes = Column(Text, nullable=True)
+    reviewed_by = Column(Integer, ForeignKey("users.user_id"), nullable=True)
+    review_notes = Column(Text, nullable=True)
+    reviewed_at = Column(DateTime, nullable=True)
+    fulfilled_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    requester = relationship("User", foreign_keys=[requested_by])
+    reviewer = relationship("User", foreign_keys=[reviewed_by])
+    location = relationship("Location", foreign_keys=[location_id])
+    region = relationship("Region", foreign_keys=[region_id])
+    variant = relationship("ItemVariant")
+
+
+class FieldConsumableAssignment(Base):
+    """
+    Tracks non-serialized gear/uniforms/consumables (e.g., T-shirts, safety vests, drop cable)
+    assigned to Field Technicians by City Managers or Regional Admins.
+    """
+    __tablename__ = "field_consumable_assignments"
+
+    assignment_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    user_id = Column(Integer, ForeignKey("users.user_id"), nullable=False)
+    variant_id = Column(Integer, ForeignKey("item_variants.variant_id"), nullable=False)
+    location_id = Column(Integer, ForeignKey("locations.location_id"), nullable=False)
+    quantity = Column(Integer, nullable=False, default=1)
+    assigned_by = Column(Integer, ForeignKey("users.user_id"), nullable=False)
+    notes = Column(Text, nullable=True)
+    delivery_status = Column(String(30), default="DISPATCHED", nullable=False) # DISPATCHED, DELIVERED
+    delivered_at = Column(DateTime, nullable=True)
+    assigned_at = Column(DateTime, default=datetime.utcnow)
+
+    technician = relationship("User", foreign_keys=[user_id])
+    assigner = relationship("User", foreign_keys=[assigned_by])
+    location = relationship("Location", foreign_keys=[location_id])
+    variant = relationship("ItemVariant")
+
+
+class RefreshToken(Base):
+    """
+    Stores hashed refresh tokens for rotation and revocation on logout/deactivation.
+    """
+    __tablename__ = "refresh_tokens"
+
+    id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    user_id = Column(Integer, ForeignKey("users.user_id", ondelete="CASCADE"), nullable=False, index=True)
+    token_hash = Column(String(128), unique=True, index=True, nullable=False)
+    expires_at = Column(DateTime, nullable=False)
+    revoked_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    user = relationship("User")
+
+
+class PasswordResetToken(Base):
+    """
+    Single-use, time-limited password reset token (stored as SHA-256 hash).
+    """
+    __tablename__ = "password_reset_tokens"
+
+    id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    user_id = Column(Integer, ForeignKey("users.user_id", ondelete="CASCADE"), nullable=False, index=True)
+    token_hash = Column(String(128), unique=True, index=True, nullable=False)
+    expires_at = Column(DateTime, nullable=False)
+    used_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    user = relationship("User")
+
+
+class IdempotencyRecord(Base):
+    """
+    Prevents duplicate execution of dispatch or bulk-assignment requests with the same Idempotency-Key.
+    """
+    __tablename__ = "idempotency_records"
+
+    id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    idempotency_key = Column(String(128), unique=True, index=True, nullable=False)
+    endpoint = Column(String(128), nullable=False)
+    user_id = Column(Integer, ForeignKey("users.user_id"), nullable=False)
+    response_json = Column(Text, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+# ================= STAGE 2: SUPPORT TICKETS, LOST ASSETS & STOCK AUDITS =================
+
+class Ticket(Base):
+    __tablename__ = "tickets"
+
+    ticket_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    ticket_code = Column(String(40), unique=True, index=True, nullable=False)
+    created_by = Column(Integer, ForeignKey("users.user_id"), nullable=False, index=True)
+    city_id = Column(Integer, ForeignKey("locations.location_id"), nullable=True, index=True)
+    region_id = Column(Integer, ForeignKey("regions.region_id"), nullable=True, index=True)
+    category = Column(String(50), nullable=False, default="OTHER") # ASSET_FAULT, STOCK_ISSUE, ACCESS_ACCOUNT, REQUEST_QUERY, OTHER
+    priority = Column(String(30), nullable=False, default="NORMAL") # LOW, NORMAL, HIGH, URGENT
+    status = Column(String(40), nullable=False, default="OPEN", index=True) # OPEN, IN_PROGRESS, WAITING_ON_REQUESTER, RESOLVED, CLOSED, REOPENED
+    subject = Column(String(200), nullable=False)
+    description = Column(Text, nullable=False)
+    related_asset_id = Column(Integer, ForeignKey("asset_units.asset_id"), nullable=True)
+    related_request_id = Column(Integer, ForeignKey("requests.request_id"), nullable=True)
+    related_repair_id = Column(Integer, ForeignKey("repair_requests.repair_request_id"), nullable=True)
+    assignee_id = Column(Integer, ForeignKey("users.user_id"), nullable=True, index=True)
+    escalation_level = Column(Integer, nullable=False, default=0) # 0=City, 1=Regional, 2=SuperAdmin
+    sla_due_at = Column(DateTime, nullable=False)
+    sla_breached = Column(Boolean, default=False, nullable=False)
+    resolved_at = Column(DateTime, nullable=True)
+    closed_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    creator = relationship("User", foreign_keys=[created_by])
+    assignee = relationship("User", foreign_keys=[assignee_id])
+    city = relationship("Location", foreign_keys=[city_id])
+    region = relationship("Region", foreign_keys=[region_id])
+    related_asset = relationship("AssetUnit", foreign_keys=[related_asset_id])
+
+
+class TicketComment(Base):
+    __tablename__ = "ticket_comments"
+
+    comment_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    ticket_id = Column(Integer, ForeignKey("tickets.ticket_id", ondelete="CASCADE"), nullable=False, index=True)
+    author_id = Column(Integer, ForeignKey("users.user_id"), nullable=False)
+    body = Column(Text, nullable=False)
+    is_internal = Column(Boolean, default=False, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    ticket = relationship("Ticket")
+    author = relationship("User", foreign_keys=[author_id])
+
+
+class TicketAttachment(Base):
+    __tablename__ = "ticket_attachments"
+
+    attachment_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    ticket_id = Column(Integer, ForeignKey("tickets.ticket_id", ondelete="CASCADE"), nullable=False, index=True)
+    comment_id = Column(Integer, ForeignKey("ticket_comments.comment_id", ondelete="CASCADE"), nullable=True)
+    uploaded_by = Column(Integer, ForeignKey("users.user_id"), nullable=False)
+    original_filename = Column(String(255), nullable=False)
+    stored_filename = Column(String(255), unique=True, nullable=False)
+    content_type = Column(String(100), nullable=False)
+    size_bytes = Column(Integer, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class TicketEvent(Base):
+    __tablename__ = "ticket_events"
+
+    event_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    ticket_id = Column(Integer, ForeignKey("tickets.ticket_id", ondelete="CASCADE"), nullable=False, index=True)
+    actor_id = Column(Integer, ForeignKey("users.user_id"), nullable=False)
+    event_type = Column(String(50), nullable=False) # CREATED, STATUS_CHANGED, REASSIGNED, ESCALATED, SLA_BREACHED
+    details = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    actor = relationship("User", foreign_keys=[actor_id])
+
+
+class LossReport(Base):
+    __tablename__ = "loss_reports"
+
+    loss_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    asset_id = Column(Integer, ForeignKey("asset_units.asset_id"), nullable=False, index=True)
+    reported_by = Column(Integer, ForeignKey("users.user_id"), nullable=False)
+    loss_type = Column(String(30), nullable=False, default="LOST") # LOST, STOLEN
+    circumstances = Column(Text, nullable=False)
+    date_last_seen = Column(String(50), nullable=True)
+    police_report_ref = Column(String(120), nullable=True)
+    status = Column(String(40), nullable=False, default="PENDING_REGIONAL", index=True) # PENDING_REGIONAL, APPROVED, REJECTED, RECOVERED
+    reviewed_by = Column(Integer, ForeignKey("users.user_id"), nullable=True)
+    review_notes = Column(Text, nullable=True)
+    reviewed_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    asset = relationship("AssetUnit")
+    reporter = relationship("User", foreign_keys=[reported_by])
+    reviewer = relationship("User", foreign_keys=[reviewed_by])
+
+
+class StockAudit(Base):
+    __tablename__ = "stock_audits"
+
+    audit_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    audit_code = Column(String(40), unique=True, index=True, nullable=False)
+    scope_type = Column(String(30), nullable=False, default="CITY") # CENTRAL, CITY
+    location_id = Column(Integer, ForeignKey("locations.location_id"), nullable=True)
+    region_id = Column(Integer, ForeignKey("regions.region_id"), nullable=True)
+    status = Column(String(30), nullable=False, default="DRAFT", index=True) # DRAFT, COUNTING, SUBMITTED, APPROVED, CLOSED
+    started_by = Column(Integer, ForeignKey("users.user_id"), nullable=False)
+    approved_by = Column(Integer, ForeignKey("users.user_id"), nullable=True)
+    variance_threshold_pct = Column(Float, nullable=False, default=2.0)
+    notes = Column(Text, nullable=True)
+    submitted_at = Column(DateTime, nullable=True)
+    approved_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    starter = relationship("User", foreign_keys=[started_by])
+    approver = relationship("User", foreign_keys=[approved_by])
+    location = relationship("Location", foreign_keys=[location_id])
+
+
+class StockAuditLine(Base):
+    __tablename__ = "stock_audit_lines"
+
+    line_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    audit_id = Column(Integer, ForeignKey("stock_audits.audit_id", ondelete="CASCADE"), nullable=False, index=True)
+    variant_id = Column(Integer, ForeignKey("item_variants.variant_id"), nullable=False)
+    system_quantity = Column(Integer, nullable=False, default=0)
+    counted_quantity = Column(Integer, nullable=False, default=0)
+    variance = Column(Integer, nullable=False, default=0)
+    reason = Column(Text, nullable=True)
+    scanned_serials_json = Column(Text, nullable=True)
+    missing_serials_json = Column(Text, nullable=True)
+
+    audit = relationship("StockAudit")
+    variant = relationship("ItemVariant")
+
+
+class ReceiptBatch(Base):
+    __tablename__ = "receipt_batches"
+
+    batch_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    batch_code = Column(String(40), unique=True, index=True, nullable=False)
+    variant_id = Column(Integer, ForeignKey("item_variants.variant_id"), nullable=False)
+    received_by = Column(Integer, ForeignKey("users.user_id"), nullable=False)
+    reference_note = Column(Text, nullable=True)
+    unit_count = Column(Integer, nullable=False, default=0)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    variant = relationship("ItemVariant")
+    receiver = relationship("User", foreign_keys=[received_by])
+
+
+class NotificationPreference(Base):
+    __tablename__ = "notification_preferences"
+
+    pref_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    user_id = Column(Integer, ForeignKey("users.user_id", ondelete="CASCADE"), unique=True, nullable=False)
+    email_requests = Column(Boolean, default=True, nullable=False)
+    email_requisitions = Column(Boolean, default=True, nullable=False)
+    email_tickets = Column(Boolean, default=True, nullable=False)
+    email_low_stock = Column(Boolean, default=True, nullable=False)
+    email_noc = Column(Boolean, default=True, nullable=False)
+    email_weekly_digest = Column(Boolean, default=True, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    user = relationship("User")
+
+
+
+
+

@@ -11,7 +11,9 @@ export const RequestsSection = ({
   onReject,
   onDispatch,
   onConfirmDelivery,
-  isCentralAdmin = false
+  isCentralAdmin = false,
+  pendingFieldReqsCount = 0,
+  onNavigateToFieldReqs
 }) => {
   const { user } = useAuth();
   const effectiveRole = user?.role || (isCentralAdmin ? 'SUPER_ADMIN' : 'MANAGER');
@@ -118,6 +120,20 @@ export const RequestsSection = ({
       </div>
 
       {/* Quick Summary Grid */}
+      {pendingFieldReqsCount > 0 && onNavigateToFieldReqs && !isFieldWorker && (
+        <div className="p-3.5 rounded-xl bg-purple-50 border border-purple-200 flex flex-wrap items-center justify-between gap-3 text-xs">
+          <span className="font-bold text-[#1c023d]">
+            You have <span className="text-[#e20d65] font-black">{pendingFieldReqsCount}</span> pending Field Technician gear/machine request(s) awaiting review.
+          </span>
+          <button
+            type="button"
+            onClick={onNavigateToFieldReqs}
+            className="px-3.5 py-1.5 rounded-lg bg-[#e20d65] hover:bg-[#cc0059] text-white font-extrabold transition"
+          >
+            Review Field Tech Requests →
+          </button>
+        </div>
+      )}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 w-full">
         <div className="bg-white p-4 rounded-lg border border-slate-200 shadow-xs flex items-center justify-between">
           <div>

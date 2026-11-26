@@ -5,7 +5,8 @@ from sqlalchemy import func
 from datetime import datetime, timedelta
 
 from ..database import get_db
-from ..models import Location, Region, Item, ItemVariant, InventoryStock, AssetUnit, AssetStatusEnum, RequestModel, RequestStatusEnum, Alert, AlertStatusEnum
+from ..models import Location, Region, Item, ItemVariant, InventoryStock, AssetUnit, AssetStatusEnum, RequestModel, RequestStatusEnum, Alert, AlertStatusEnum, User
+from ..auth import require_regional_or_super_admin
 from ..schemas import DashboardSummary
 
 router = APIRouter(prefix="/api/analytics", tags=["Analytics"])
@@ -43,7 +44,7 @@ def get_dashboard_summary(db: Session = Depends(get_db)):
         total_locations=total_locations,
         total_skus=total_skus,
         total_central_stock=total_central_stock,
-        total_inventory_value=round(total_valuation, 2),
+        total_inventory_value=round(float(total_valuation), 2),
         open_alerts_count=open_alerts_count,
         pending_requests_count=pending_requests_count,
         total_regions=total_regions,
@@ -125,3 +126,134 @@ def get_turnover_rate(db: Session = Depends(get_db)):
         {"category": "Field Apparel", "turnover_rate": 5.2, "days_in_inventory": 16},
         {"category": "Zip Ties & Accessories", "turnover_rate": 6.1, "days_in_inventory": 14}
     ]
+
+
+@router.get("/lifecycle-insights")
+def get_lifecycle_insights(
+    days: int = 90,
+    current_user: User = Depends(require_regional_or_super_admin),
+    db: Session = Depends(get_db)
+):
+    """
+    Lifecycle analytics for Super Admin (national) or Regional Admin (filtered to their region).
+    """
+    from datetime import datetime, timedelta
+    from statistics import median
+    from ..models import (
+        AssetUnit, AssetStatusEnum, AssetComplaint, RepairRequest,
+        LossReport, FieldRequisition, Ticket, RoleEnum
+    )
+
+    cutoff = datetime.utcnow() - timedelta(days=max(1, days))
+    is_reg = current_user.role == RoleEnum.REGIONAL_ADMIN.value
+    reg_city_ids = (
+        {l.location_id for l in db.query(Location).filter(Location.region_id == current_user.region_id).all()}
+        if is_reg else None
+    )
+
+    # 1. Failure rate by model (faults per 100 units)
+    assets_q = db.query(AssetUnit)
+    if is_reg:
+        assets_q = assets_q.filter(AssetUnit.current_location_id.in_(reg_city_ids))
+    assets = assets_q.all()
+    model_units = {}
+    asset_model_map = {}
+    for a in assets:
+        m = a.variant.item.name if a.variant and a.variant.item else "Unknown"
+        model_units[m] = model_units.get(m, 0) + 1
+        asset_model_map[a.asset_id] = m
+
+    complaints = db.query(AssetComplaint).filter(AssetComplaint.created_at >= cutoff).all()
+    model_faults = {}
+    for c in complaints:
+        m = asset_model_map.get(c.asset_id)
+        if m:
+            model_faults[m] = model_faults.get(m, 0) + 1
+
+    failure_rate_by_model = [
+        {
+            "model": m,
+            "units_in_service": cnt,
+            "faults": model_faults.get(m, 0),
+            "faults_per_100": round((model_faults.get(m, 0) / cnt) * 100, 2) if cnt else 0.0,
+        }
+        for m, cnt in model_units.items()
+    ]
+
+    # 2. Mean time in repair & outcome split
+    repairs_q = db.query(RepairRequest).filter(RepairRequest.created_at >= cutoff)
+    if is_reg:
+        repairs_q = repairs_q.filter(RepairRequest.region_id == current_user.region_id)
+    repairs = repairs_q.all()
+    repair_hours = []
+    returned_cnt = 0
+    scrapped_cnt = 0
+    for r in repairs:
+        if r.status == "REPAIR_RETURNED":
+            returned_cnt += 1
+        elif r.status == "ROUTED_TO_SCRAP":
+            scrapped_cnt += 1
+        if r.updated_at and r.created_at and r.status in ("REPAIR_RETURNED", "ROUTED_TO_SCRAP"):
+            repair_hours.append((r.updated_at - r.created_at).total_seconds() / 3600.0)
+    mean_repair_hours = round(sum(repair_hours) / len(repair_hours), 2) if repair_hours else 0.0
+
+    # 3. Idle stock ageing buckets (IN_WAREHOUSE)
+    now = datetime.utcnow()
+    ageing = {"0_30": 0, "31_90": 0, "90_plus": 0}
+    for a in assets:
+        if a.status == AssetStatusEnum.IN_WAREHOUSE.value and a.created_at:
+            age_days = (now - a.created_at).days
+            if age_days <= 30:
+                ageing["0_30"] += 1
+            elif age_days <= 90:
+                ageing["31_90"] += 1
+            else:
+                ageing["90_plus"] += 1
+
+    # 4. Lost & stolen by city
+    losses = db.query(LossReport).filter(LossReport.created_at >= cutoff, LossReport.status == "APPROVED").all()
+    lost_by_city = {}
+    for lr in losses:
+        loc = lr.asset.location if lr.asset else None
+        if is_reg and (not loc or loc.region_id != current_user.region_id):
+            continue
+        cname = loc.name if loc else "Central Warehouse"
+        lost_by_city[cname] = lost_by_city.get(cname, 0) + 1
+
+    # 5. Requisition outliers (workers above 2x peer median, flagged for review)
+    reqs_q = db.query(FieldRequisition).filter(FieldRequisition.created_at >= cutoff)
+    if is_reg:
+        reqs_q = reqs_q.filter(FieldRequisition.region_id == current_user.region_id)
+    reqs = reqs_q.all()
+    per_worker = {}
+    for rq in reqs:
+        uid = rq.requested_by
+        if uid not in per_worker:
+            per_worker[uid] = {"user_id": uid, "name": rq.requester.name if rq.requester else f"Tech #{uid}", "total_qty": 0}
+        per_worker[uid]["total_qty"] += rq.quantity_requested
+    qtys = [w["total_qty"] for w in per_worker.values()]
+    med = median(qtys) if qtys else 0
+    outliers = [w for w in per_worker.values() if med > 0 and w["total_qty"] > med * 2]
+
+    # 6. Ticket metrics
+    t_q = db.query(Ticket).filter(Ticket.created_at >= cutoff)
+    if is_reg:
+        t_q = t_q.filter(Ticket.region_id == current_user.region_id)
+    tickets = t_q.all()
+    breached = sum(1 for t in tickets if t.sla_breached)
+    sla_compliance_pct = round(((len(tickets) - breached) / len(tickets)) * 100, 1) if tickets else 100.0
+
+    return {
+        "days": days,
+        "failure_rate_by_model": failure_rate_by_model,
+        "repair_metrics": {
+            "mean_time_hours": mean_repair_hours,
+            "returned": returned_cnt,
+            "scrapped": scrapped_cnt,
+        },
+        "idle_stock_ageing": ageing,
+        "lost_by_city": [{"city": k, "count": v} for k, v in lost_by_city.items()],
+        "requisition_outliers": {"peer_median": med, "flagged_workers": outliers},
+        "ticket_metrics": {"total": len(tickets), "sla_breached": breached, "sla_compliance_pct": sla_compliance_pct},
+    }
+

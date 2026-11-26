@@ -6,7 +6,9 @@ import api from '../api/client';
 export const Login = () => {
   const { login } = useAuth();
 
-  const [mode, setMode] = useState('LOGIN'); // 'LOGIN', 'SIGNUP', 'OTP'
+  const [mode, setMode] = useState('LOGIN'); // 'LOGIN', 'SIGNUP', 'OTP', 'FORGOT', 'RESET'
+  const [resetToken, setResetToken] = useState('');
+  const [newPassword, setNewPassword] = useState('');
 
   // Form states
   const [email, setEmail] = useState('');
@@ -220,6 +222,16 @@ export const Login = () => {
                 </div>
               </div>
 
+              <div className="flex items-center justify-end">
+                <button
+                  type="button"
+                  onClick={() => { setMode('FORGOT'); setErrorMsg(''); setSuccessMsg(''); }}
+                  className="text-[11px] font-bold text-[#6700ce] hover:underline"
+                >
+                  Forgot Password?
+                </button>
+              </div>
+
               <button
                 type="submit"
                 disabled={loading}
@@ -311,6 +323,99 @@ export const Login = () => {
             </form>
           )}
 
+          {/* MODE 4: FORGOT PASSWORD */}
+          {mode === 'FORGOT' && (
+            <form
+              onSubmit={async (e) => {
+                e.preventDefault();
+                setErrorMsg('');
+                setSuccessMsg('');
+                setLoading(true);
+                try {
+                  const res = await api.post('/auth/forgot-password', { email });
+                  setSuccessMsg(res.data.message);
+                  setMode('RESET');
+                } catch (err) {
+                  setErrorMsg(err.response?.data?.detail || 'Failed to request reset.');
+                } finally {
+                  setLoading(false);
+                }
+              }}
+              className="space-y-4 text-xs"
+            >
+              <div>
+                <h3 className="text-base font-black text-[#1c023d]">Reset Password</h3>
+                <p className="text-slate-500 mt-0.5">Enter your account email to receive a single-use reset token.</p>
+              </div>
+              <input
+                type="email"
+                required
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                placeholder="you@tataplay.com"
+                className="w-full px-3.5 py-3 rounded-lg bg-slate-50 border border-slate-300 font-semibold"
+              />
+              <button type="submit" disabled={loading} className="w-full py-3 rounded-xl bg-[#e20d65] text-white font-extrabold">
+                {loading ? 'Sending...' : 'Send Reset Instructions'}
+              </button>
+              <button type="button" onClick={() => setMode('LOGIN')} className="w-full py-2 text-slate-500 font-bold">
+                Back to Sign In
+              </button>
+            </form>
+          )}
+
+          {/* MODE 5: RESET PASSWORD WITH TOKEN */}
+          {mode === 'RESET' && (
+            <form
+              onSubmit={async (e) => {
+                e.preventDefault();
+                setErrorMsg('');
+                setSuccessMsg('');
+                setLoading(true);
+                try {
+                  const res = await api.post('/auth/reset-password', { token: resetToken, new_password: newPassword });
+                  setSuccessMsg(res.data.message);
+                  setResetToken('');
+                  setNewPassword('');
+                  setMode('LOGIN');
+                } catch (err) {
+                  setErrorMsg(err.response?.data?.detail || 'Password reset failed.');
+                } finally {
+                  setLoading(false);
+                }
+              }}
+              className="space-y-4 text-xs"
+            >
+              <div>
+                <h3 className="text-base font-black text-[#1c023d]">Enter Reset Token</h3>
+                <p className="text-slate-500 mt-0.5">Minimum 10 characters, cannot contain your name or email.</p>
+              </div>
+              <input
+                type="text"
+                required
+                value={resetToken}
+                onChange={(e) => setResetToken(e.target.value)}
+                placeholder="Paste reset token"
+                className="w-full px-3.5 py-2.5 rounded-lg bg-slate-50 border border-slate-300 font-mono"
+              />
+              <input
+                type="password"
+                required
+                minLength={10}
+                value={newPassword}
+                onChange={(e) => setNewPassword(e.target.value)}
+                placeholder="New password (min 10 chars)"
+                className="w-full px-3.5 py-2.5 rounded-lg bg-slate-50 border border-slate-300 font-semibold"
+              />
+              <button type="submit" disabled={loading} className="w-full py-3 rounded-xl bg-[#e20d65] text-white font-extrabold">
+                {loading ? 'Resetting...' : 'Set New Password'}
+              </button>
+              <button type="button" onClick={() => setMode('LOGIN')} className="w-full py-2 text-slate-500 font-bold">
+                Back to Sign In
+              </button>
+            </form>
+          )}
+
           {/* MODE 2: SIGNUP FORM */}
           {mode === 'SIGNUP' && (
             <form onSubmit={handleSignupSubmit} className="space-y-4 text-xs">
@@ -394,6 +499,16 @@ export const Login = () => {
                   placeholder="••••••••"
                   className="w-full px-3.5 py-2.5 rounded-lg bg-slate-50 border border-slate-300 text-slate-900 font-semibold focus:outline-none focus:border-[#e20d65]"
                 />
+              </div>
+
+              <div className="flex items-center justify-end">
+                <button
+                  type="button"
+                  onClick={() => { setMode('FORGOT'); setErrorMsg(''); setSuccessMsg(''); }}
+                  className="text-[11px] font-bold text-[#6700ce] hover:underline"
+                >
+                  Forgot Password?
+                </button>
               </div>
 
               <button

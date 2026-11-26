@@ -26,5 +26,5 @@ EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
   CMD curl -f http://localhost:8000/healthz || exit 1
 
-# Launch with production Gunicorn + Uvicorn worker manager
-CMD ["gunicorn", "-c", "gunicorn_conf.py", "app.main:app"]
+# Launch with Alembic migration + production Gunicorn server
+CMD ["./entrypoint.sh"]

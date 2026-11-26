@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import api from '../api/client';
+import { clearOfflineCache } from '../utils/offlineQueue';
 
 const AuthContext = createContext();
 
@@ -30,19 +31,28 @@ export const AuthProvider = ({ children }) => {
 
   const login = async (email, password) => {
     const res = await api.post('/auth/login', { email, password });
-    const { access_token, ...userData } = res.data;
+    const { access_token, refresh_token, ...userData } = res.data;
     setToken(access_token);
     setUser(userData);
     localStorage.setItem('stocksentry_token', access_token);
+    if (refresh_token) localStorage.setItem('stocksentry_refresh_token', refresh_token);
     localStorage.setItem('stocksentry_user', JSON.stringify(userData));
     return userData;
   };
 
-  const logout = () => {
-    setToken(null);
-    setUser(null);
-    localStorage.removeItem('stocksentry_token');
-    localStorage.removeItem('stocksentry_user');
+  const logout = async () => {
+    try {
+      if (localStorage.getItem('stocksentry_token')) {
+        await api.post('/auth/logout').catch(() => {});
+      }
+    } finally {
+      setToken(null);
+      setUser(null);
+      localStorage.removeItem('stocksentry_token');
+      localStorage.removeItem('stocksentry_refresh_token');
+      localStorage.removeItem('stocksentry_user');
+      clearOfflineCache();
+    }
   };
 
   return (

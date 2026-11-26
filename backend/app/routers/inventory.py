@@ -302,7 +302,7 @@ def get_regional_stock(
                         ])
                     ).count()
                 else:
-                    city_mult = {1: 45, 2: 40, 3: 25, 4: 35, 5: 20, 6: 20, 7: 18}.get(city.location_id, 15)
+                    city_mult = {1: 45, 2: 40, 3: 25, 4: 35, 5: 20, 6: 20, 7: 18}.get(int(city.location_id), 15)
                     city_qty = city_mult
 
                 region_stock += city_qty

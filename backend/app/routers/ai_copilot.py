@@ -29,6 +29,7 @@ class AIChatResponse(BaseModel):
     suggested_actions: Optional[List[str]] = []
     navigation_actions: Optional[List[ChatNavigationAction]] = []
     insights: Optional[dict] = None
+    structured_card: Optional[Dict[str, Any]] = None
 
 # --- DB Query Functions & Rule-Based Intelligence Handlers ---
 
@@ -113,7 +114,7 @@ def get_hub_inventory_summary(loc: Location, db: Session) -> Dict[str, Any]:
         counts_by_item[item_name] = counts_by_item.get(item_name, 0) + 1
     
     # Consumable calculation matching inventory.py logic
-    consumable_mult = {1: 45, 2: 40, 3: 25, 4: 35, 5: 20, 6: 20, 7: 18}.get(loc.location_id, 15)
+    consumable_mult = {1: 45, 2: 40, 3: 25, 4: 35, 5: 20, 6: 20, 7: 18}.get(int(loc.location_id), 15)
     
     return {
         "serialized_total": len(assets),
@@ -191,6 +192,21 @@ def build_copilot_response(user_msg: str, current_user: User, db: Session) -> AI
         else:
             reply_lines.append("✅ No active fault complaints have been recorded by ground technicians today.")
             
+        fault_cards = []
+        for c in complaints[:6]:
+            reporter_name = c.reporter.name if c.reporter else "Field Worker"
+            item_name = c.asset.variant.item.name if (c.asset and c.asset.variant and c.asset.variant.item) else "Hardware"
+            serial = c.asset.serial_number if c.asset else "N/A"
+            fault_cards.append({
+                "complaint_id": c.complaint_id,
+                "reporter_name": reporter_name,
+                "item_name": item_name,
+                "serial_number": serial,
+                "description": c.description,
+                "status": c.status,
+                "date": c.created_at.strftime("%b %d, %I:%M %p") if c.created_at else "Today"
+            })
+
         return AIChatResponse(
             reply="\n".join(reply_lines),
             suggested_actions=[
@@ -202,7 +218,20 @@ def build_copilot_response(user_msg: str, current_user: User, db: Session) -> AI
                 ChatNavigationAction(label="🛠️ Open Repairs & Complaints Console", tab="repairs", icon="Wrench"),
                 ChatNavigationAction(label="🔍 Audit Serial Lifecycle", tab="lifecycle", icon="Search")
             ],
-            insights={"domain": "repairs", "total_complaints": len(complaints), "open_count": len(open_complaints)}
+            insights={"domain": "repairs", "total_complaints": len(complaints), "open_count": len(open_complaints)},
+            structured_card={
+                "card_type": "FAULT_LIST",
+                "title": "Ground-Force Fault Telemetry & Triage Status",
+                "badge": f"{len(open_complaints)} Open Pending Review",
+                "badge_color": "rose",
+                "metrics": [
+                    {"label": "Total Complaints", "value": str(len(complaints))},
+                    {"label": "Open Pending", "value": str(len(open_complaints))},
+                    {"label": "Routed to Repair", "value": str(len(routed_repairs))},
+                    {"label": "Bench Repaired", "value": str(len(repairs))}
+                ],
+                "items": fault_cards
+            }
         )
 
     # -------------------------------------------------------------
@@ -237,7 +266,23 @@ def build_copilot_response(user_msg: str, current_user: User, db: Session) -> AI
                 ChatNavigationAction(label=f"👥 View {matched_city.city} in Directory", tab="users-mgmt", icon="Users"),
                 ChatNavigationAction(label=f"🗺️ View {matched_city.city} Stock Matrix", tab="regional-stock", icon="MapPin")
             ],
-            insights={"domain": "location_manager", "city": matched_city.city, "manager": mgr.name if mgr else None}
+            insights={"domain": "location_manager", "city": matched_city.city, "manager": mgr.name if mgr else None},
+            structured_card={
+                "card_type": "HUB_PROFILE",
+                "title": f"{matched_city.city} Regional Hub Profile",
+                "badge": region.name if region else "General",
+                "badge_color": "purple",
+                "city": matched_city.city,
+                "hub_name": matched_city.name,
+                "region": region.name if region else "General",
+                "manager_name": mgr.name if mgr else "Unassigned",
+                "manager_email": mgr.email if mgr else "N/A",
+                "regional_admin_name": reg_admin.name if reg_admin else "None",
+                "regional_admin_email": reg_admin.email if reg_admin else "N/A",
+                "technicians_count": field_count,
+                "coordinates": f"{matched_city.latitude}° N, {matched_city.longitude}° E",
+                "status": "OPERATIONAL"
+            }
         )
 
     if any(k in q for k in location_keywords) or ('location' in q and not matched_city):
@@ -254,6 +299,20 @@ def build_copilot_response(user_msg: str, current_user: User, db: Session) -> AI
             reg_name = loc.region.name if loc.region else "General"
             reply_lines.append(f"• **{loc.name}** ({loc.city}, {reg_name}) — Manager: **{mgr.name if mgr else 'Unassigned'}** (`{mgr.email if mgr else ''}`)")
         
+        hub_items = []
+        for loc in all_locs:
+            m_user = db.query(User).filter(User.user_id == loc.manager_id).first()
+            tech_cnt = db.query(User).filter(User.city_id == loc.location_id, User.role == RoleEnum.FIELD_WORKER.value).count()
+            hub_items.append({
+                "location_id": loc.location_id,
+                "city": loc.city,
+                "name": loc.name,
+                "region": loc.region.name if loc.region else "General",
+                "manager_name": m_user.name if m_user else "Unassigned",
+                "manager_email": m_user.email if m_user else "",
+                "technicians_count": tech_cnt
+            })
+
         return AIChatResponse(
             reply="\n".join(reply_lines),
             suggested_actions=[
@@ -265,7 +324,14 @@ def build_copilot_response(user_msg: str, current_user: User, db: Session) -> AI
                 ChatNavigationAction(label="👥 Open User & Hub Directory", tab="users-mgmt", icon="Users"),
                 ChatNavigationAction(label="🗺️ Open Regional Stock Matrix", tab="regional-stock", icon="MapPin")
             ],
-            insights={"domain": "network_hubs", "hubs_count": len(all_locs), "regions_count": len(all_regions)}
+            insights={"domain": "network_hubs", "hubs_count": len(all_locs), "regions_count": len(all_regions)},
+            structured_card={
+                "card_type": "TOPOLOGY_GRID",
+                "title": "Nationwide Regional Distribution Topology",
+                "badge": f"{len(all_locs)} Hubs across {len(all_regions)} Regions",
+                "badge_color": "emerald",
+                "hubs": hub_items
+            }
         )
 
     # -------------------------------------------------------------
@@ -277,8 +343,14 @@ def build_copilot_response(user_msg: str, current_user: User, db: Session) -> AI
         mgr = db.query(User).filter(User.user_id == matched_city.manager_id).first()
         
         breakdown_lines = []
+        breakdown_items = []
         for itm_name, cnt in hub_info["breakdown"].items():
             breakdown_lines.append(f"  - **{itm_name}**: **{cnt} units** deployed")
+            breakdown_items.append({
+                "item_name": itm_name,
+                "count": cnt,
+                "status": "HEALTHY" if cnt > 10 else "LOW"
+            })
             
         if not breakdown_lines:
             breakdown_lines.append("  - Serialized hardware units currently deployed to field techs or in hub dispatch")
@@ -302,7 +374,19 @@ def build_copilot_response(user_msg: str, current_user: User, db: Session) -> AI
                 ChatNavigationAction(label=f"🗺️ View {matched_city.city} in Regional Matrix", tab="regional-stock", icon="MapPin"),
                 ChatNavigationAction(label="📦 Open Central Stock Master", tab="central-stock", icon="Package")
             ],
-            insights={"domain": "city_stock", "city": matched_city.city, "units": hub_info['serialized_total']}
+            insights={"domain": "city_stock", "city": matched_city.city, "units": hub_info['serialized_total']},
+            structured_card={
+                "card_type": "STOCK_TABLE",
+                "title": f"Local Inventory Staging — {matched_city.city} Hub",
+                "badge": f"{hub_info['serialized_total']} Hardware Units",
+                "badge_color": "indigo",
+                "city": matched_city.city,
+                "hub_name": matched_city.name,
+                "manager_name": mgr.name if mgr else "Admin",
+                "serialized_total": hub_info['serialized_total'],
+                "consumables_total": hub_info['consumable_units'],
+                "items": breakdown_items
+            }
         )
 
     # -------------------------------------------------------------
@@ -329,6 +413,22 @@ def build_copilot_response(user_msg: str, current_user: User, db: Session) -> AI
                 f"• Historical audit: **{len(resolved_alerts)} prior threshold events** were successfully resolved by automated restocking."
             ]
             
+        alert_items = []
+        for a in open_alerts:
+            var = db.query(ItemVariant).filter(ItemVariant.variant_id == a.variant_id).first()
+            item_name = var.item.name if var and var.item else "Variant"
+            var_name = var.variant_name if var else ""
+            alert_items.append({
+                "alert_id": a.alert_id,
+                "item_name": item_name,
+                "variant_name": var_name,
+                "current_qty": a.current_qty_at_trigger,
+                "threshold": a.threshold_at_trigger,
+                "deficit": max(0, a.threshold_at_trigger - a.current_qty_at_trigger),
+                "severity": "CRITICAL" if a.current_qty_at_trigger <= a.threshold_at_trigger * 0.5 else "HIGH",
+                "status": a.status
+            })
+
         return AIChatResponse(
             reply="\n".join(lines),
             suggested_actions=[
@@ -340,7 +440,15 @@ def build_copilot_response(user_msg: str, current_user: User, db: Session) -> AI
                 ChatNavigationAction(label="⚠️ View Alert Telemetry", tab="alerts", icon="AlertTriangle"),
                 ChatNavigationAction(label="📦 Check Central Warehouse Stock", tab="central-stock", icon="Package")
             ],
-            insights={"domain": "alerts", "open_alerts_count": len(open_alerts)}
+            insights={"domain": "alerts", "open_alerts_count": len(open_alerts)},
+            structured_card={
+                "card_type": "ALERT_FEED",
+                "title": "Real-Time Threshold Alert Telemetry",
+                "badge": f"{len(open_alerts)} Critical Breaches" if open_alerts else "All SKUs Healthy",
+                "badge_color": "rose" if open_alerts else "emerald",
+                "status": "CRITICAL" if open_alerts else "HEALTHY",
+                "alerts": alert_items
+            }
         )
 
     # -------------------------------------------------------------
@@ -362,14 +470,34 @@ def build_copilot_response(user_msg: str, current_user: User, db: Session) -> AI
         
         # Check specific sample case Vikram Sharma
         vikram = db.query(User).filter(User.email == "vikram.exit@tataplay.com").first()
+        vikram_card_data = None
         if vikram:
             v_assets = db.query(AssetUnit).filter(AssetUnit.current_holder_id == vikram.user_id).all()
             lines.append(f"• **Target Case — {vikram.name}** ({vikram.email}):")
             lines.append(f"  - Role: **{vikram.role}** ({vikram.city_location.name if vikram.city_location else 'Delhi Hub'})")
             lines.append(f"  - Offboarding Initiated: **{'YES (Pending Return)' if vikram.is_leaving else 'NO'}**")
-            lines.append(f"  - Assigned Assets Held: **{len(v_assets)} items** ({', '.join([a.serial_number for a in v_assets]) if v_assets else 'None'})")
+            lines.append(f"  - Assigned Assets Held: **{len(v_assets)} items** ({', '.join([str(a.serial_number) for a in v_assets]) if v_assets else 'None'})")
             lines.append(f"  - Clearance Status: **{vikram.clearance_status}**")
             lines.append("")
+            vikram_card_data = {
+                "user_id": vikram.user_id,
+                "name": vikram.name,
+                "email": vikram.email,
+                "role": vikram.role,
+                "hub": vikram.city_location.name if vikram.city_location else "Delhi Hub",
+                "is_leaving": vikram.is_leaving,
+                "clearance_status": vikram.clearance_status,
+                "assets_held_count": len(v_assets),
+                "assets": [
+                    {
+                        "serial_number": str(a.serial_number),
+                        "item_name": a.variant.item.name if (a.variant and a.variant.item) else "Hardware",
+                        "variant": a.variant.variant_name if a.variant else "",
+                        "status": a.status
+                    }
+                    for a in v_assets
+                ]
+            }
             
         for u in leaving_users:
             if vikram and u.user_id == vikram.user_id:
@@ -388,7 +516,16 @@ def build_copilot_response(user_msg: str, current_user: User, db: Session) -> AI
                 ChatNavigationAction(label="📋 Open Offboarding & NOC Desk", tab="offboarding", icon="FileText"),
                 ChatNavigationAction(label="👥 View User Directory", tab="users-mgmt", icon="Users")
             ],
-            insights={"domain": "offboarding", "leaving_count": len(leaving_users)}
+            insights={"domain": "offboarding", "leaving_count": len(leaving_users)},
+            structured_card={
+                "card_type": "OFFBOARDING_CASE",
+                "title": "Staff Offboarding & Asset Surrender Desk",
+                "badge": f"{len(leaving_users)} in Exit Pipeline",
+                "badge_color": "amber",
+                "total_leaving": len(leaving_users),
+                "noc_issued_count": len(noc_records),
+                "target_case": vikram_card_data
+            }
         )
 
     # -------------------------------------------------------------
@@ -409,10 +546,22 @@ def build_copilot_response(user_msg: str, current_user: User, db: Session) -> AI
             f"• **Pending City Hub Requests:** **{len(pending_reqs)} awaiting approval**",
             ""
         ]
-        for tr in in_transit[:3]:
+        transit_items = []
+        for tr in in_transit:
             itm_name = tr.variant.item.name if (tr.variant and tr.variant.item) else "Stock"
             loc_name = tr.location.city if tr.location else "Hub"
-            lines.append(f"• **Req #{tr.request_id}**: {tr.quantity_requested}x {itm_name} ➔ **{loc_name}** | Carrier: **{tr.carrier_name or 'BlueDart Express'}** (AWB: `{tr.tracking_number or 'TRK-IN-TRANSIT'}`)")
+            transit_items.append({
+                "request_id": tr.request_id,
+                "item_name": itm_name,
+                "quantity": tr.quantity_requested,
+                "destination": loc_name,
+                "carrier": tr.carrier_name or "BlueDart Express",
+                "tracking_number": tr.tracking_number or "TRK-IN-TRANSIT",
+                "eta": tr.estimated_delivery or "2 Business Days",
+                "status": tr.status
+            })
+            if len(transit_items) <= 3:
+                lines.append(f"• **Req #{tr.request_id}**: {tr.quantity_requested}x {itm_name} ➔ **{loc_name}** | Carrier: **{tr.carrier_name or 'BlueDart Express'}** (AWB: `{tr.tracking_number or 'TRK-IN-TRANSIT'}`)")
             
         for pr in pending_reqs[:2]:
             itm_name = pr.variant.item.name if (pr.variant and pr.variant.item) else "Stock"
@@ -430,7 +579,16 @@ def build_copilot_response(user_msg: str, current_user: User, db: Session) -> AI
                 ChatNavigationAction(label="🚚 Open In-Transit Tracking", tab="tracking", icon="Truck"),
                 ChatNavigationAction(label="📋 View Stock Requests Queue", tab="requests", icon="ClipboardList")
             ],
-            insights={"domain": "tracking", "in_transit": len(in_transit), "pending": len(pending_reqs)}
+            insights={"domain": "tracking", "in_transit": len(in_transit), "pending": len(pending_reqs)},
+            structured_card={
+                "card_type": "LOGISTICS_TRACKING",
+                "title": "Dispatch Logistics & Active Replenishment Pipeline",
+                "badge": f"{len(in_transit)} Active Deliveries",
+                "badge_color": "indigo",
+                "in_transit_count": len(in_transit),
+                "pending_count": len(pending_reqs),
+                "shipments": transit_items
+            }
         )
 
     # -------------------------------------------------------------
@@ -459,13 +617,24 @@ def build_copilot_response(user_msg: str, current_user: User, db: Session) -> AI
                 ChatNavigationAction(label="👥 Open User & Staff Directory", tab="users-mgmt", icon="Users"),
                 ChatNavigationAction(label="🛠️ Open Repairs & Complaints Console", tab="repairs", icon="Wrench")
             ],
-            insights={"domain": "workforce", "total_technicians": total_workers}
+            insights={"domain": "workforce", "total_technicians": total_workers},
+            structured_card={
+                "card_type": "KPI_SUMMARY",
+                "title": "Field Ground Workforce Roster",
+                "badge": f"{total_workers} Total Technicians",
+                "badge_color": "purple",
+                "metrics": [
+                    {"label": "Total Technicians", "value": str(total_workers), "status": "HEALTHY"},
+                    {"label": "Delhi Hub Force", "value": str(delhi_workers), "status": "HEALTHY"},
+                    {"label": "Mumbai Hub Force", "value": str(mumbai_workers), "status": "HEALTHY"},
+                    {"label": "Direct Handovers", "value": "Enabled", "status": "EMERALD"}
+                ]
+            }
         )
 
     # -------------------------------------------------------------
     # 8. GENERAL INVENTORY, CENTRAL STOCK & VALUATION SEARCH
     # -------------------------------------------------------------
-    # Check if querying specific item or broad inventory
     res = execute_search_inventory(db, q)
     items = res.get("inventory_items", [])
     
@@ -490,14 +659,36 @@ def build_copilot_response(user_msg: str, current_user: User, db: Session) -> AI
                 ChatNavigationAction(label="📦 Open Central Stock Master", tab="central-stock", icon="Package"),
                 ChatNavigationAction(label="🗺️ View Regional Stock Matrix", tab="regional-stock", icon="MapPin")
             ],
-            insights={"domain": "valuation", "total_val": total_val}
+            insights={"domain": "valuation", "total_val": total_val},
+            structured_card={
+                "card_type": "KPI_SUMMARY",
+                "title": "Central Inventory Valuation Summary",
+                "badge": f"₹{total_val:,.2f}",
+                "badge_color": "emerald",
+                "metrics": [
+                    {"label": "Total Valuation", "value": f"₹{total_val:,.2f}", "status": "HEALTHY"},
+                    {"label": "Active Central Units", "value": f"{sum(s.current_quantity for s in stock_records):,}", "status": "HEALTHY"},
+                    {"label": "Catalog SKUs", "value": f"{len(stock_records)} Variants", "status": "NEUTRAL"}
+                ]
+            }
         )
         
     if items:
         lines = [f"📦 **Central Warehouse Inventory Results for '{user_msg}'**:"]
+        search_card_items = []
         for itm in items:
             status_tag = "⚠️ LOW STOCK" if itm["is_low_stock"] else "✅ HEALTHY"
             lines.append(f"• **{itm['item_name']}** ({itm['variant_name']}): **{itm['central_stock_quantity']} units** in stock | Unit Cost: ₹{itm['unit_cost']:,.2f} | Reorder Point: {itm['reorder_threshold']} [{status_tag}]")
+            search_card_items.append({
+                "item_name": itm["item_name"],
+                "variant_name": itm["variant_name"],
+                "category": itm["category"],
+                "stock": itm["central_stock_quantity"],
+                "unit_cost": f"₹{itm['unit_cost']:,.2f}",
+                "threshold": itm["reorder_threshold"],
+                "is_low_stock": itm["is_low_stock"],
+                "status": "LOW_STOCK" if itm["is_low_stock"] else "HEALTHY"
+            })
         
         return AIChatResponse(
             reply="\n".join(lines),
@@ -510,7 +701,14 @@ def build_copilot_response(user_msg: str, current_user: User, db: Session) -> AI
                 ChatNavigationAction(label="📦 View in Central Warehouse Master", tab="central-stock", icon="Package"),
                 ChatNavigationAction(label="🗺️ Check Regional Hub Distribution", tab="regional-stock", icon="MapPin")
             ],
-            insights={"domain": "item_search", "matches": len(items)}
+            insights={"domain": "item_search", "matches": len(items)},
+            structured_card={
+                "card_type": "INVENTORY_SEARCH",
+                "title": f"Inventory Results for '{user_msg}'",
+                "badge": f"{len(items)} Matches Found",
+                "badge_color": "indigo",
+                "items": search_card_items[:8]
+            }
         )
 
     # -------------------------------------------------------------
@@ -548,7 +746,20 @@ def build_copilot_response(user_msg: str, current_user: User, db: Session) -> AI
             ChatNavigationAction(label="👥 User & Hub Directory", tab="users-mgmt", icon="Users"),
             ChatNavigationAction(label="📦 Central Inventory Master", tab="central-stock", icon="Package")
         ],
-        insights={"mode": "air-gapped-local", "total_val": total_val}
+        insights={"mode": "air-gapped-local", "total_val": total_val},
+        structured_card={
+            "card_type": "KPI_SUMMARY",
+            "title": "Executive Operational Command Telemetry",
+            "badge": "Air-Gapped / Zero External LLM",
+            "badge_color": "emerald",
+            "metrics": [
+                {"label": "Central Valuation", "value": f"₹{total_val:,.2f}", "status": "HEALTHY"},
+                {"label": "Nationwide Hubs", "value": "7 City Hubs", "status": "HEALTHY"},
+                {"label": "Open Alerts", "value": f"{open_alerts_cnt} Breaches", "status": "ROSE" if open_alerts_cnt > 0 else "HEALTHY"},
+                {"label": "Pending Orders", "value": f"{pending_cnt} POs", "status": "NEUTRAL"},
+                {"label": "Equipment Faults", "value": f"{complaints_cnt} Reports", "status": "NEUTRAL"}
+            ]
+        }
     )
 
 async def _process_ai_chat(req: AIChatRequest, current_user: User, db: Session) -> AIChatResponse:

@@ -1,0 +1,15 @@
+{
+  "name": "StockSentry Field Ops",
+  "short_name": "StockSentry",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#1c023d",
+  "theme_color": "#e20d65",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml"
+    }
+  ]
+}

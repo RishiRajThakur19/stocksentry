@@ -1,0 +1,47 @@
+name: StockSentry CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  backend-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install backend dependencies
+        run: |
+          cd backend
+          pip install -r requirements.txt pytest pip-audit
+      - name: Run pytest suite
+        run: |
+          cd backend
+          pytest -v tests/test_stage1_hardening.py
+          python test_field_worker_role.py
+          python verify_all_requirements.py
+      - name: Python dependency audit
+        run: |
+          cd backend
+          pip-audit -r requirements.txt || true
+
+  frontend-build-and-audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Install & build frontend
+        run: |
+          cd frontend
+          npm ci
+          npm run build
+      - name: NPM audit
+        run: |
+          cd frontend
+          npm audit --audit-level=high || true

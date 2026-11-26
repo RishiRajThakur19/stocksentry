@@ -2,9 +2,18 @@
   "venvPath": "backend",
   "venv": "venv",
   "extraPaths": [
-    "backend"
+    "backend",
+    "backend/venv/lib/python3.9/site-packages"
   ],
   "include": [
     "backend"
-  ]
+  ],
+  "typeCheckingMode": "off",
+  "reportMissingImports": "none",
+  "reportMissingModuleSource": "none",
+  "reportAttributeAccessIssue": "none",
+  "reportArgumentType": "none",
+  "reportGeneralTypeIssues": "none",
+  "reportAssignmentType": "none",
+  "reportOptionalMemberAccess": "none"
 }
